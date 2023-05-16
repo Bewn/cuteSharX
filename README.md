@@ -5,6 +5,8 @@
  
  I don't know the state of the cutefish code but the terminal is pretty barebones and possibly the project would be more of a total rewrite and named nod to cutefish but scrapping the original code. I think the gui is pretty nice but I strictly want to move away from X11. Maybe the wayland release will be "cuteshawl" and the the os will be a different project. 
  
+ It's looking more like a rre-write,  but I should be able to use the ui elements as a base for a theme using different wayland technologies for compositing and ditch the ui as it is compltelely. Intent to port to qt6 what is compatible. could change to qutefish 
+ 
  Semi-ironically coding this entirely via ssh from an ipad. aim to use waypipe project for wayland `ssh -X` style forwarding
  
  It has no strict philosophical stance or guarentees, it just aims to be simple and useful and done in the spirit of readable and intentional code. Not aiming to be an organization or monolith (except the kernel... for now!) but to include known-to-me community-made tools generally without guarantee, arch user repo and github projects used or reccommended. Possible edition Communix with emphasis on modern implementations of standard programs. 
