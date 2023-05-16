@@ -3,6 +3,8 @@
  
  aims at a re-implementation of cutefishOS as not debian-with-some-gui-apps, but a proper and different unix system, more generally a misc directory for setting up a kernel and package manager with good config and a modern ui post-install, the system should be easily understood and accessible to a unix oriented user.
  
+ I don't know the state of the cutefish code but the terminal is pretty barebones and possibly the project would be more of a total rewrite and named nod to cutefish but scrapping the original code. I think the gui is pretty nice but I strictly want to move away from X11. Maybe the wayland release will be "cuteshawl" and the the os will be a different project. 
+ 
  Semi-ironically coding this entirely via ssh from an ipad. aim to use waypipe project for wayland `ssh -X` style forwarding
  
  It has no strict philosophical stance or guarentees, it just aims to be simple and useful and done in the spirit of readable and intentional code. Not aiming to be an organization or monolith (except the kernel... for now!) but to include known-to-me community-made tools generally without guarantee, arch user repo and github projects used or reccommended. Possible edition Communix with emphasis on modern implementations of standard programs. 
