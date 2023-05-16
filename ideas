@@ -1,0 +1,2 @@
+depending on order of completion, include bsh as shell
+focus on stong separation of userland: aim to have passwordless user accounts with master encryption
