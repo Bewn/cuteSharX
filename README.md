@@ -3,7 +3,7 @@
  
  possible aim for gentoo + guix for total setup control without the burden of re-compiling chromium for several hours  because you changed a use flag. Plus the freedom to sacrifice freedom by not being strictly a guix install.
  
- By starting from nothing but a gentoo stage 3 or arch base + base-devel we should be able to ensure a clean environment for making a 
+ By starting from nothing but a gentoo stage 3 or arch base + base-devel we should be able to ensure a clean environment for making a stable-bleeding-edge/"curated" distro
  
  Maybe look into xen
  
