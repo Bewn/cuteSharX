@@ -1,3 +1,42 @@
 [submodule "terminal"]
 	path = cutefish-project/terminal
 	url = https://github.com/cutefishos/terminal
+[submodule "cutefish-project/texteditor"]
+	path = cutefish-project/texteditor
+	url = https://github.com/cutefishos/texteditor
+[submodule "cutefish-project/videoplayer"]
+	path = cutefish-project/videoplayer
+	url = https://github.com/cutefishos/videoplayer
+[submodule "cutefish-project/calculator"]
+	path = cutefish-project/calculator
+	url = https://github.com/cutefishos/calculator
+[submodule "cutefish-project/gtk-themes"]
+	path = cutefish-project/gtk-themes
+	url = https://github.com/cutefishos/gtk-themes
+[submodule "cutefish-project/appmotor"]
+	path = cutefish-project/appmotor
+	url = https://github.com/cutefishos/appmotor
+[submodule "cutefish-project/sddm-theme"]
+	path = cutefish-project/sddm-theme
+	url = https://github.com/cutefishos/sddm-theme
+[submodule "cutefish-project/daemon"]
+	path = cutefish-project/daemon
+	url = https://github.com/cutefishos/daemon
+[submodule "cutefish-project/icons"]
+	path = cutefish-project/icons
+	url = https://github.com/cutefishos/icons
+[submodule "cutefish-project/statusbar"]
+	path = cutefish-project/statusbar
+	url = https://github.com/cutefishos/statusbar
+[submodule "cutefish-project/qt-plugins"]
+	path = cutefish-project/qt-plugins
+	url = https://github.com/cutefishos/qt-plugins
+[submodule "cutefish-project/settings"]
+	path = cutefish-project/settings
+	url = https://github.com/cutefishos/settings
+[submodule "cutefish-project/dock"]
+	path = cutefish-project/dock
+	url = https://github.com/cutefishos/dock
+[submodule "cutefish-project/fishui"]
+	path = cutefish-project/fishui
+	url = https://github.com/cutefishos/fishui
