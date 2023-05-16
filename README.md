@@ -15,3 +15,5 @@
  start with project in qemu for repoducable builds on different architectures.
  
  bsd license for original code, gpl etc inherited from all dependecies.
+
+undecided how repos will be structured. Maybe this should be strictly the desktop environment and anoyther repo for setting up a reproducable containerized lxc based install with automaticly encrypted base system. 
