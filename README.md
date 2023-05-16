@@ -10,3 +10,5 @@
  aim to use modern tools and minimal dependencies. possibly fork void linux and use runit instead, but realistically systemd is useful and ubiquitous.
  
  start with project in qemu for repoducable builds on different architectures.
+ 
+ bsd license for original code, gpl etc inherited from all dependecies.
