@@ -7,4 +7,4 @@
  
  Maybe look into xen
  
- aim to use modern tools and minimal dependencies. possiblt use runit but realistically systemd is more 
+ aim to use modern tools and minimal dependencies. possibly fork void linux and use runit instead, but realistically systemd is useful and ubiquitous.
