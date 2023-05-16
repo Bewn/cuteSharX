@@ -1,0 +1,3 @@
+[submodule "terminal"]
+	path = cutefish-project/terminal
+	url = https://github.com/cutefishos/terminal
