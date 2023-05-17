@@ -43,3 +43,33 @@
 [submodule "cutefish-project/core"]
 	path = cutefish-project/core
 	url = https://github.com/cutefishos/core
+[submodule "cutefish-project/screenshot"]
+	path = cutefish-project/screenshot
+	url = https://github.com/cutefishos/screenshot
+[submodule "cutefish-project/screenlocker"]
+	path = cutefish-project/screenlocker
+	url = https://github.com/cutefishos/screenlocker
+[submodule "cutefish-project/libcutefish"]
+	path = cutefish-project/libcutefish
+	url = https://github.com/cutefishos/libcutefish
+[submodule "cutefish-project/wallpapers"]
+	path = cutefish-project/wallpapers
+	url = https://github.com/cutefishos/wallpapers
+[submodule "cutefish-project/filemanager"]
+	path = cutefish-project/filemanager
+	url = https://github.com/cutefishos/filemanager
+[submodule "cutefish-project/launcher"]
+	path = cutefish-project/launcher
+	url = https://github.com/cutefishos/launcher
+[submodule "cutefish-project/kwin-plugins"]
+	path = cutefish-project/kwin-plugins
+	url = https://github.com/cutefishos/kwin-plugins
+[submodule "cutefish-project/cursor-themes"]
+	path = cutefish-project/cursor-themes
+	url = https://github.com/cutefishos/cursor-themes
+[submodule "cutefish-project/plymouth-theme"]
+	path = cutefish-project/plymouth-theme
+	url = https://github.com/cutefishos/plymouth-theme
+[submodule "cutefish-project/docs"]
+	path = cutefish-project/docs
+	url = https://github.com/cutefishos/docs
