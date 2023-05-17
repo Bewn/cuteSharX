@@ -40,3 +40,6 @@
 [submodule "cutefish-project/fishui"]
 	path = cutefish-project/fishui
 	url = https://github.com/cutefishos/fishui
+[submodule "cutefish-project/core"]
+	path = cutefish-project/core
+	url = https://github.com/cutefishos/core
