@@ -5,6 +5,8 @@
  
  Possibly the user environment of a possibly named calmUnix operating system, a coincidental anagram of mac-linux. The cutefishOS project seems to have died and left with it a cute set of visually mac-like linux tools. I had been working on a reproducable containerized arch installer and this is a fitting way to 1. give the cutefish project a life-after-death and 2. give the arch base install a simple and well-designed UI. Somewhat playfully being an obvious macOS clone visually, osX was just "borrowed" BSD unix, so going full cirle I give the code added by me a BSD license and implement better-than-mac functionality. (there is also the potentential of pre-configuring qemu to run macos itself in a vm but that should be a subproject, and already is by someone else).
  
+ 
+ cuteSharX also pays homage to the original linux name: freax
 
  
  I don't know the state of the cutefish code but the terminal is pretty barebones and possibly the project would be more of a total rewrite and named nod to cutefish but scrapping the original code. I think the gui is pretty nice but I strictly want to move away from X11. Maybe the wayland release will be "cuteshawl" and the the os will be a different project. 
