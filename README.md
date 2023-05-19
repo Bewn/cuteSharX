@@ -15,7 +15,7 @@
  
  Semi-ironically coding this entirely via ssh from an ipad. aim to use waypipe project for wayland `ssh -X` style forwarding
  
- It has no strict philosophical stance or guarentees, it just aims to be simple and useful and done in the spirit of readable and intentional code. Not aiming to be an organization or monolith (except the kernel... for now!) but to include known-to-me community-made tools generally without guarantee, arch user repo and github projects used or reccommended. Possible edition Communix with emphasis on modern implementations of standard programs. 
+ It has no strict philosophical stance or guarentees, it just aims to be simple and useful and done in the spirit of readable and intentional code. Not aiming to be an organization or monolith (except the kernel... for now!) but to include known-to-me community-made tools generally without guarantee, arch user repo and git projects used or reccommended. Possible edition Communix with emphasis on modern implementations of standard programs. 
  
  the easy way is just installing the cutefish packages on arch normally but i think it could be interesting to fork the main ui apps and work on them. Attempt to port evrything to wayland if possible.
  
