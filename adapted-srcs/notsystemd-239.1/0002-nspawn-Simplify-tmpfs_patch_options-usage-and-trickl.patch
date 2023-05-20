@@ -1,0 +1,162 @@
+From d469c3144958a510d6e982459fb597b865daab57 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Tue, 13 Jun 2017 18:06:09 -0400
+Subject: [PATCH 02/38] nspawn: Simplify tmpfs_patch_options() usage, and
+ trickle that up
+
+One of the things that tmpfs_patch_options does is take an (optional) UID,
+and insert "uid=${UID},gid=${UID}" into the options string.  So we need a
+uid_t argument, and a way of telling if we should use it.  Fortunately,
+that is built in to the uid_t type by having UID_INVALID as a possible
+value.
+
+So this is really a feature that requires one argument.  Yet, it is somehow
+taking 4!  That is absurd.  Simplify it to only take one argument, and have
+that trickle all the way up to mount_all()'s usage.
+
+Now, in may of the uses, the argument becomes
+
+    uid_shift == 0 ? UID_INVALID : uid_shift
+
+because it used to treat uid_shift=0 as invalid unless the patch_ids flag
+was also set.  This keeps the behavior the same.  Note that in all cases
+where it is invoked, if !use_userns (sometimes called !userns), then
+uid_shift is 0; we don't have to add any checks for that.
+
+That said, I'm pretty sure that "uid=0" and not setting "uid=" are the
+same, but Christian Brauner seemed to not think so when implementing the
+cgns support.  https://github.com/systemd/systemd/pull/3589
+
+(cherry picked from commit 2fa017f16922776ff9751dc22031c7ee49920729)
+---
+ src/nspawn/nspawn-mount.c | 25 +++++++++----------------
+ src/nspawn/nspawn-mount.h |  2 +-
+ src/nspawn/nspawn.c       |  2 --
+ 3 files changed, 10 insertions(+), 19 deletions(-)
+
+diff --git a/src/nspawn/nspawn-mount.c b/src/nspawn/nspawn-mount.c
+index 3613a179fe..21684aa49b 100644
+--- a/src/nspawn/nspawn-mount.c
++++ b/src/nspawn/nspawn-mount.c
+@@ -329,17 +329,13 @@ int overlay_mount_parse(CustomMount **l, size_t *n, const char *s, bool read_onl
+ 
+ static int tmpfs_patch_options(
+                 const char *options,
+-                bool userns,
+-                uid_t uid_shift, uid_t uid_range,
+-                bool patch_ids,
++                uid_t uid_shift,
+                 const char *selinux_apifs_context,
+                 char **ret) {
+ 
+         char *buf = NULL;
+ 
+-        if ((userns && uid_shift != 0) || patch_ids) {
+-                assert(uid_shift != UID_INVALID);
+-
++        if (uid_shift != UID_INVALID) {
+                 if (asprintf(&buf, "%s%suid=" UID_FMT ",gid=" UID_FMT,
+                              strempty(options), options ? "," : "",
+                              uid_shift, uid_shift) < 0)
+@@ -497,7 +493,7 @@ static int mkdir_userns_p(const char *prefix, const char *path, mode_t mode, uid
+ 
+ int mount_all(const char *dest,
+               MountSettingsMask mount_settings,
+-              uid_t uid_shift, uid_t uid_range,
++              uid_t uid_shift,
+               const char *selinux_apifs_context) {
+ 
+ #define PROC_INACCESSIBLE(path)                                         \
+@@ -646,10 +642,7 @@ int mount_all(const char *dest,
+ 
+                 o = mount_table[k].options;
+                 if (streq_ptr(mount_table[k].type, "tmpfs")) {
+-                        if (in_userns)
+-                                r = tmpfs_patch_options(o, use_userns, 0, uid_range, true, selinux_apifs_context, &options);
+-                        else
+-                                r = tmpfs_patch_options(o, use_userns, uid_shift, uid_range, false, selinux_apifs_context, &options);
++                        r = tmpfs_patch_options(o, in_userns ? 0 : uid_shift, selinux_apifs_context, &options);
+                         if (r < 0)
+                                 return log_oom();
+                         if (r > 0)
+@@ -752,7 +745,7 @@ static int mount_tmpfs(
+                         return log_error_errno(r, "Creating mount point for tmpfs %s failed: %m", where);
+         }
+ 
+-        r = tmpfs_patch_options(m->options, userns, uid_shift, uid_range, false, selinux_apifs_context, &buf);
++        r = tmpfs_patch_options(m->options, uid_shift == 0 ? UID_INVALID : uid_shift, selinux_apifs_context, &buf);
+         if (r < 0)
+                 return log_oom();
+         options = r > 0 ? buf : m->options;
+@@ -985,7 +978,7 @@ static int mount_legacy_cgns_supported(
+                  * uid/gid as seen from e.g. /proc/1/mountinfo. So we simply
+                  * pass uid 0 and not uid_shift to tmpfs_patch_options().
+                  */
+-                r = tmpfs_patch_options("mode=755", userns, 0, uid_range, true, selinux_apifs_context, &options);
++                r = tmpfs_patch_options("mode=755", 0, selinux_apifs_context, &options);
+                 if (r < 0)
+                         return log_oom();
+ 
+@@ -1087,7 +1080,7 @@ static int mount_legacy_cgns_unsupported(
+         if (r == 0) {
+                 _cleanup_free_ char *options = NULL;
+ 
+-                r = tmpfs_patch_options("mode=755", userns, uid_shift, uid_range, false, selinux_apifs_context, &options);
++                r = tmpfs_patch_options("mode=755", uid_shift == 0 ? UID_INVALID : uid_shift, selinux_apifs_context, &options);
+                 if (r < 0)
+                         return log_oom();
+ 
+@@ -1298,7 +1291,7 @@ int setup_volatile_state(
+                 return log_error_errno(errno, "Failed to create %s: %m", directory);
+ 
+         options = "mode=755";
+-        r = tmpfs_patch_options(options, userns, uid_shift, uid_range, false, selinux_apifs_context, &buf);
++        r = tmpfs_patch_options(options, uid_shift == 0 ? UID_INVALID : uid_shift, selinux_apifs_context, &buf);
+         if (r < 0)
+                 return log_oom();
+         if (r > 0)
+@@ -1331,7 +1324,7 @@ int setup_volatile(
+                 return log_error_errno(errno, "Failed to create temporary directory: %m");
+ 
+         options = "mode=755";
+-        r = tmpfs_patch_options(options, userns, uid_shift, uid_range, false, selinux_apifs_context, &buf);
++        r = tmpfs_patch_options(options, uid_shift == 0 ? UID_INVALID : uid_shift, selinux_apifs_context, &buf);
+         if (r < 0)
+                 return log_oom();
+         if (r > 0)
+diff --git a/src/nspawn/nspawn-mount.h b/src/nspawn/nspawn-mount.h
+index b823282cbd..e948d02c2c 100644
+--- a/src/nspawn/nspawn-mount.h
++++ b/src/nspawn/nspawn-mount.h
+@@ -43,7 +43,7 @@ int bind_mount_parse(CustomMount **l, size_t *n, const char *s, bool read_only);
+ int tmpfs_mount_parse(CustomMount **l, size_t *n, const char *s);
+ int overlay_mount_parse(CustomMount **l, size_t *n, const char *s, bool read_only);
+ 
+-int mount_all(const char *dest, MountSettingsMask mount_settings, uid_t uid_shift, uid_t uid_range, const char *selinux_apifs_context);
++int mount_all(const char *dest, MountSettingsMask mount_settings, uid_t uid_shift, const char *selinux_apifs_context);
+ int mount_sysfs(const char *dest, MountSettingsMask mount_settings);
+ 
+ int mount_cgroups(const char *dest, CGroupUnified unified_requested, bool userns, uid_t uid_shift, uid_t uid_range, const char *selinux_apifs_context, bool use_cgns);
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index 56877bd932..4a2c64ed86 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -2558,7 +2558,6 @@ static int inner_child(
+         r = mount_all(NULL,
+                       arg_mount_settings | MOUNT_IN_USERNS,
+                       arg_uid_shift,
+-                      arg_uid_range,
+                       arg_selinux_apifs_context);
+         if (r < 0)
+                 return r;
+@@ -2990,7 +2989,6 @@ static int outer_child(
+         r = mount_all(directory,
+                       arg_mount_settings,
+                       arg_uid_shift,
+-                      arg_uid_range,
+                       arg_selinux_apifs_context);
+         if (r < 0)
+                 return r;
+-- 
+2.18.0
+

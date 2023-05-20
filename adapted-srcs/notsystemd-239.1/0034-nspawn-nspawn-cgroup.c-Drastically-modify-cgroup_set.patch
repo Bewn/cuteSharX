@@ -1,0 +1,474 @@
+From 8c74e48a02fa45ba7757566a53378c8a826d0cd7 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Sat, 20 May 2017 17:49:22 -0400
+Subject: [PATCH 34/38] nspawn: nspawn-cgroup.c: Drastically modify
+ cgroup_setup()
+
+This is large and needs split in to multiple commits.
+
+ - improve error messages
+ - work correctly when outer_cgver==FULL && inner_cgver==NONE
+---
+ src/nspawn/nspawn-cgroup.c | 339 +++++++++++++++++++++++++++----------
+ src/nspawn/nspawn.c        |   4 +-
+ 2 files changed, 256 insertions(+), 87 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index 8072ae4651..d2df6ae400 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -11,7 +11,9 @@
+ #include "nspawn-cgroup.h"
+ #include "nspawn-mount.h"
+ #include "path-util.h"
++#include "process-util.h"
+ #include "rm-rf.h"
++#include "stdio-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+ #include "user-util.h"
+@@ -100,6 +102,64 @@ static int cgfile_get_cgroup(FILE *cgfile, const char *opts, char **ret_cgroup)
+         }
+ }
+ 
++static int cgdir_attach(const char *cgdir, pid_t pid) {
++
++        const char *filepath = NULL;
++        char c[DECIMAL_STR_MAX(pid_t) + 2];
++
++        assert(cgdir);
++        assert(pid >= 0);
++
++        filepath = strjoina(cgdir, "/cgroup.procs");
++
++        if (pid == 0)
++                pid = getpid_cached();
++
++        xsprintf(c, PID_FMT "\n", pid);
++
++        return write_string_file(filepath, c, 0);
++}
++
++static int cgdir_enable_all(const char *cgdir) {
++
++        const char *filepath = NULL;
++        _cleanup_fclose_ FILE *f = NULL;
++        _cleanup_free_ char *controllers = NULL;
++        const char *controller, *state;
++        size_t controller_len;
++        int r;
++
++        filepath = strjoina(cgdir, "/cgroup.controllers", NULL);
++        r = read_one_line_file(filepath, &controllers);
++        if (r < 0)
++                return r;
++
++        FOREACH_WORD(controller, controller_len, controllers, state) {
++                char s[controller_len+2];
++
++                s[0] = '+';
++                memcpy(&s[1], controller, controller_len);
++                s[controller_len+1] = '\0';
++
++                if (!f) {
++                        filepath = strjoina(cgdir, "/cgroup.subtree_control", NULL);
++                        f = fopen(filepath, "we");
++                        if (!f) {
++                                log_debug_errno(errno, "Failed to open cgroup.subtree_control file of %s: %m", cgdir);
++                                break;
++                        }
++                }
++
++                r = write_string_stream(f, s, 0);
++                if (r < 0) {
++                        log_debug_errno(r, "Failed to enable controller %s for %s: %m", &s[1], cgdir);
++                        clearerr(f);
++                }
++        }
++
++        return 0;
++}
++
+ static int cgdir_chown(const char *path, uid_t uid_shift) {
+ 
+         _cleanup_close_ int fd = -1;
+@@ -129,42 +189,49 @@ static int cgdir_chown(const char *path, uid_t uid_shift) {
+ 
+ /* cgroup_setup *****************************************************/
+ 
+-static int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+-        _cleanup_free_ char *path = NULL, *fs = NULL;
++static int chown_cgroup(pid_t pid, uid_t uid_shift, const char *cg1sd_mountpoint, const char *cg2_mountpoint) {
++        _cleanup_free_ char *cgroup = NULL;
++        const char *cgfilename;
++        _cleanup_fclose_ FILE *cgfile = NULL;
+         int r;
+ 
+-        r = cg_pid_get_path(NULL, pid, &path);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to get container cgroup path: %m");
+-
+-        r = cg_get_path(SYSTEMD_CGROUP_CONTROLLER, path, NULL, &fs);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to get file system path for container cgroup: %m");
++        if (!cg1sd_mountpoint && !cg2_mountpoint)
++                return 0;
+ 
+-        r = cgdir_chown(fs, uid_shift);
++        /* Determine the cgroup. Thanks to sync_cgroup(), we can get away with only doing this once. */
++        cgfilename = procfs_file_alloca(pid, "cgroup");
++        cgfile = fopen(cgfilename, "re");
++        if (!cgfile)
++                log_error_errno(errno, "chown container cgroup: Failed to get cgroup of the container: %m");
++        r = cgfile_get_cgroup(cgfile, cg2_mountpoint ? NULL : "name=systemd", &cgroup);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to chown() cgroup %s: %m", fs);
++                return log_error_errno(r, "chown container cgroup: Failed to get cgroup of the container: %m");
+ 
+-        if (inner_cgver == CGROUP_UNIFIED_SYSTEMD233) {
+-                _cleanup_free_ char *lfs = NULL;
+-                /* Always propagate access rights from unified to legacy controller */
++        /* cgroup-v2 */
++        if (cg2_mountpoint) {
++                char *cgdir;
+ 
+-                r = cg_get_path(SYSTEMD_CGROUP_CONTROLLER_LEGACY, path, NULL, &lfs);
++                cgdir = strjoina(cg2_mountpoint, cgroup);
++                r = cgdir_chown(cgdir, uid_shift);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to get file system path for container cgroup: %m");
++                        return log_error_errno(r, "chown container cgroup: cgdir_chown(path=\"%s\", uid=" UID_FMT "): %m", cgdir, uid_shift);
++        }
++
++        /* cgroup-v1 name=systemd */
++        if (cg1sd_mountpoint) {
++                char *cgdir;
+ 
+-                r = cgdir_chown(lfs, uid_shift);
++                cgdir = strjoina(cg1sd_mountpoint, cgroup);
++                r = cgdir_chown(cgdir, uid_shift);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to chown() cgroup %s: %m", lfs);
++                        return log_error_errno(r, "chown container cgroup: cgdir_chown(path=\"%s\", uid=" UID_FMT "): %m", cgdir, uid_shift);
+         }
+ 
+         return 0;
+ }
+ 
+-static int sync_cgroup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift) {
++static int sync_cgroup(pid_t pid, uid_t uid_shift, const char *mountpoint) {
+         _cleanup_free_ char *cgroup = NULL;
+-        char mountpoint[] = "/tmp/containerXXXXXX", pid_string[DECIMAL_STR_MAX(pid) + 1];
+-        bool undo_mount = false;
+         const char *fn;
+         int r;
+ 
+@@ -175,58 +242,23 @@ static int sync_cgroup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner
+ 
+         r = cg_pid_get_path(SYSTEMD_CGROUP_CONTROLLER, pid, &cgroup);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to get control group of " PID_FMT ": %m", pid);
+-
+-        /* In order to access the container's hierarchy we need to mount it */
+-        if (!mkdtemp(mountpoint))
+-                return log_error_errno(errno, "Failed to generate temporary mount point for container hierarchy: %m");
+-
+-        if (outer_cgver >= CGROUP_UNIFIED_SYSTEMD232)
+-                r = mount_verbose(LOG_ERR, "cgroup", mountpoint, "cgroup",
+-                                  MS_NOSUID|MS_NOEXEC|MS_NODEV, "none,name=systemd,xattr");
+-        else
+-                r = mount_verbose(LOG_ERR, "cgroup", mountpoint, "cgroup2",
+-                                  MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
+-        if (r < 0)
+-                goto finish;
+-
+-        undo_mount = true;
++                return log_error_errno(r, "sync host cgroup -> container cgroup: Failed to determine cgroup of the container: %m");
+ 
+         /* If nspawn dies abruptly the cgroup hierarchy created below
+          * its unit isn't cleaned up. So, let's remove it
+          * https://github.com/systemd/systemd/pull/4223#issuecomment-252519810 */
+         fn = strjoina(mountpoint, cgroup);
+         (void) rm_rf(fn, REMOVE_ROOT|REMOVE_ONLY_DIRECTORIES);
++        (void) mkdir_p(fn, 0755);
+ 
+-        fn = strjoina(mountpoint, cgroup, "/cgroup.procs");
+-        (void) mkdir_parents(fn, 0755);
+-
+-        sprintf(pid_string, PID_FMT, pid);
+-        r = write_string_file(fn, pid_string, 0);
+-        if (r < 0) {
+-                log_error_errno(r, "Failed to move process: %m");
+-                goto finish;
+-        }
+-
+-        fn = strjoina(mountpoint, cgroup);
+-        r = cgdir_chown(fn, uid_shift);
++        r = cgdir_attach(fn, pid);
+         if (r < 0)
+-                log_error_errno(r, "Failed to chown() cgroup %s: %m", fn);
+-finish:
+-        if (undo_mount)
+-                (void) umount_verbose(mountpoint);
++                return log_error_errno(r, "sync host cgroup -> container cgroup: Failed to move process to %s: %m", fn);
+ 
+-        (void) rmdir(mountpoint);
+-        return r;
++        return 0;
+ }
+ 
+-static int create_subcgroup(pid_t pid, bool keep_unit) {
+-        _cleanup_free_ char *cgroup = NULL;
+-        CGroupMask supported;
+-        const char *payload;
+-        int r;
+-
+-        assert(pid > 1);
++static int create_subcgroup(pid_t pid, bool keep_unit, const char *cg1sd_mountpoint, const char *cg2_mountpoint) {
+ 
+         /* In the unified hierarchy inner nodes may only contain subgroups, but not processes. Hence, if we running in
+          * the unified hierarchy and the container does the same, and we did not create a scope unit for the container
+@@ -243,58 +275,195 @@ static int create_subcgroup(pid_t pid, bool keep_unit) {
+          * legacy setup, this is fine too, since delegation of controllers is generally not safe there, hence we won't
+          * do it. */
+ 
+-        r = cg_mask_supported(&supported);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to determine supported controllers: %m");
++        const char *cgfilename;
++        _cleanup_fclose_ FILE *cgfile = NULL;
++        _cleanup_free_ char *cgroup = NULL;
++        int r;
+ 
+-        if (keep_unit)
+-                r = cg_pid_get_path(SYSTEMD_CGROUP_CONTROLLER, 0, &cgroup);
+-        else
+-                r = cg_pid_get_path(SYSTEMD_CGROUP_CONTROLLER, pid, &cgroup);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to get our control group: %m");
++        assert(pid > 1);
++
++        if (!cg1sd_mountpoint && !cg2_mountpoint)
++                return 0;
+ 
+-        payload = strjoina(cgroup, "/payload");
+-        r = cg_create_and_attach(SYSTEMD_CGROUP_CONTROLLER, payload, pid);
++        cgfilename = procfs_file_alloca(pid, "cgroup");
++        cgfile = fopen(cgfilename, "re");
++        if (!cgfile)
++                log_error_errno(errno, "create subcgroup: Failed to get cgroup of the container: %m");
++        r = cgfile_get_cgroup(cgfile, cg2_mountpoint ? NULL : "name=systemd", &cgroup);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to create %s subcgroup: %m", payload);
++                return log_error_errno(r, "create subcgroup: Failed to get cgroup of the container: %m");
+ 
+-        if (keep_unit) {
+-                const char *supervisor;
++        if (cg2_mountpoint) {
++                const char *cgdir;
++                const char *payload;
+ 
+-                supervisor = strjoina(cgroup, "/supervisor");
+-                r = cg_create_and_attach(SYSTEMD_CGROUP_CONTROLLER, supervisor, 0);
++                cgdir = strjoina(cg2_mountpoint, cgroup);
++                payload = strjoina(cgdir, "/payload");
++
++                r = mkdir_errno_wrapper(payload, 0755);
++                if (r < 0 && r != -EEXIST)
++                        return log_error_errno(r, "create payload cgroup: Failed to create subcgroup %s: %m", payload);
++
++                r = cgdir_attach(payload, pid);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to create %s subcgroup: %m", supervisor);
++                        return log_error_errno(r, "create payload cgroup: Failed to move process to subcgroup %s: %m", payload);
++
++                if (keep_unit) {
++                        const char *supervisor;
++
++                        supervisor = strjoina(cgdir, "/supervisor");
++
++                        r = mkdir_errno_wrapper(supervisor, 0755);
++                        if (r < 0 && r != -EEXIST)
++                                return log_error_errno(r, "create supervisor cgroup: Failed to create subcgroup %s: %m", supervisor);
++
++                        r = cgdir_attach(supervisor, 0);
++                        if (r < 0)
++                                return log_error_errno(r, "create supervisor cgroup: Failed to move process to subcgroup %s: %m", supervisor);
++                }
++
++                (void) cgdir_enable_all(cgdir);
++        }
++
++        if (cg1sd_mountpoint) {
++                const char *cgdir;
++                const char *payload;
++
++                cgdir = strjoina(cg1sd_mountpoint, cgroup);
++                payload = strjoina(cgdir, "/payload");
++
++                r = mkdir_errno_wrapper(payload, 0755);
++                if (r < 0 && r != -EEXIST)
++                        return log_error_errno(r, "create payload cgroup: Failed to create subcgroup %s: %m", payload);
++
++                r = cgdir_attach(payload, pid);
++                if (r < 0)
++                        return log_error_errno(r, "create payload cgroup: Failed to move process to subcgroup %s: %m", payload);
++
++                if (keep_unit) {
++                        const char *supervisor;
++
++                        supervisor = strjoina(cgdir, "/supervisor");
++
++                        r = mkdir_errno_wrapper(supervisor, 0755);
++                        if (r < 0 && r != -EEXIST)
++                                return log_error_errno(r, "create supervisor cgroup: Failed to create subcgroup %s: %m", supervisor);
++
++                        r = cgdir_attach(supervisor, 0);
++                        if (r < 0)
++                                return log_error_errno(r, "create supervisor cgroup: Failed to move process to subcgroup %s: %m", supervisor);
++                }
+         }
+ 
+-        /* Try to enable as many controllers as possible for the new payload. */
+-        (void) cg_enable_everywhere(supported, supported, cgroup);
+         return 0;
+ }
+ 
+-int cgroup_setup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift, bool keep_unit) {
++static int cgroup_setup_internal(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift, bool keep_unit, const char *cg1sd_mountpoint, const char *cg2_mountpoint) {
+ 
+         int r;
+ 
+         if ((outer_cgver >= CGROUP_UNIFIED_SYSTEMD232) != (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232)) {
+                 /* sync the name=systemd hierarchy with the unified hierarchy */
+-                r = sync_cgroup(pid, outer_cgver, inner_cgver, uid_shift);
++                r = sync_cgroup(pid, uid_shift, outer_cgver == CGROUP_UNIFIED_NONE ? cg2_mountpoint : cg1sd_mountpoint);
+                 if (r < 0)
+                         return r;
+         }
+ 
+-        r = create_subcgroup(pid, keep_unit);
++        r = create_subcgroup(pid, keep_unit, cg1sd_mountpoint, cg2_mountpoint);
+         if (r < 0)
+                 return r;
+ 
+-        r = chown_cgroup(pid, inner_cgver, uid_shift);
++        r = chown_cgroup(pid, uid_shift, cg1sd_mountpoint, cg2_mountpoint);
+         if (r < 0)
+                 return r;
+ 
+         return 0;
+ }
+ 
++int cgroup_setup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift, bool keep_unit) {
++
++        /* The main purpose of this function is to properly "delegate" parts of the cgroup hierarchies to the container
++         * (see doc/CGROUP_DELEGATION.md). In general, delegating cgroup-v1 hierarchies is *not safe*, so we
++         * don't. However, systemd takes extra measures to make delegating the name=systemd hierarchy safe, so we make
++         * an exception for it. */
++
++        bool cg1sd_used, cg2_used;
++        _cleanup_free_ char *cg2_mountpoint = NULL;
++        _cleanup_free_ char *cg1sd_mountpoint = NULL;
++        int r, q;
++
++        assert(outer_cgver != CGROUP_UNIFIED_UNKNOWN);
++        assert(inner_cgver != CGROUP_UNIFIED_UNKNOWN);
++
++        cg1sd_used = inner_cgver == CGROUP_UNIFIED_NONE || inner_cgver == CGROUP_UNIFIED_SYSTEMD233;
++        cg2_used = inner_cgver >= CGROUP_UNIFIED_SYSTEMD232;
++        if (cg2_used) {
++                switch (outer_cgver) {
++                case CGROUP_UNIFIED_SYSTEMD233: cg2_mountpoint = strdup("/sys/fs/cgroup/unified"); break;
++                case CGROUP_UNIFIED_SYSTEMD232: cg2_mountpoint = strdup("/sys/fs/cgroup/systemd"); break;
++                case CGROUP_UNIFIED_ALL:        cg2_mountpoint = strdup("/sys/fs/cgroup");         break;
++                case CGROUP_UNIFIED_NONE:
++                        cg2_mountpoint = strdup("/tmp/container-cg2-XXXXXX");
++                        if (!mkdtemp(cg2_mountpoint))
++                                return log_error_errno(errno, "Failed to create temporary mount point for container cgroup hierarchy: %m");
++                        r = mount_verbose(LOG_ERR, "cgroup", cg2_mountpoint, "cgroup2",
++                                          MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
++                        if (r < 0) {
++                                log_error("Failed to mount container cgroup hierarchy");
++                                (void) rmdir(cg2_mountpoint);
++                                return r;
++                        }
++                        break;
++                default:
++                case CGROUP_UNIFIED_UNKNOWN:
++                        assert_not_reached("invalid outer_cgver");
++                }
++        }
++        if (cg1sd_used) {
++                switch (outer_cgver) {
++                case CGROUP_UNIFIED_NONE:
++                case CGROUP_UNIFIED_SYSTEMD233:
++                        cg1sd_mountpoint = strdup("/sys/fs/cgroup/systemd");
++                        break;
++                case CGROUP_UNIFIED_SYSTEMD232:
++                case CGROUP_UNIFIED_ALL:
++                        cg1sd_mountpoint = strdup("/tmp/container-cg1sd-XXXXXX");
++                        if (!mkdtemp(cg1sd_mountpoint))
++                                return log_error_errno(errno, "Failed to create temporary mount point for container cgroup hierarchy: %m");
++                        r = mount_verbose(LOG_ERR, "cgroup", cg1sd_mountpoint, "cgroup",
++                                          MS_NOSUID|MS_NOEXEC|MS_NODEV, "none,name=systemd,xattr");
++                        if (r < 0) {
++                                log_error("Failed to mount container cgroup hierarchy");
++                                (void) rmdir(cg1sd_mountpoint);
++                                return r;
++                        }
++                        break;
++                default:
++                case CGROUP_UNIFIED_UNKNOWN:
++                        assert_not_reached("can't use legacy/hybrid container on unknown host");
++                        break;
++                }
++        }
++
++        r = cgroup_setup_internal(pid, outer_cgver, inner_cgver, uid_shift, keep_unit,
++                                  cg1sd_used ? cg1sd_mountpoint : NULL, cg2_used ? cg2_mountpoint : NULL);
++
++        if (cg2_used && startswith(cg2_mountpoint, "/tmp")) {
++                q = umount_verbose(cg2_mountpoint);
++                if (r >= 0 && q < 0)
++                        r = q;
++                (void) rmdir(cg2_mountpoint);
++        }
++        if (cg1sd_used && startswith(cg1sd_mountpoint, "/tmp")) {
++                q = umount_verbose(cg1sd_mountpoint);
++                if (r >= 0 && q < 0)
++                        r = q;
++                (void) rmdir(cg1sd_mountpoint);
++        }
++
++        return r;
++}
++
+ /* cgroup_decide_mounts *********************************************/
+ 
+ /* Retrieve a list of cgroup v1 hierarchies. */
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index f64faee25b..5ae11ea0ce 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -369,7 +369,7 @@ static int detect_inner_cgver_from_image(const char *directory, CGroupUnified ou
+                  * to sniff the systemd version) was only added in 231, so we'll have a false negative here for 230. */
+                 r = systemd_installation_has_version(directory, 230);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to determine systemd version in container: %m");
++                        return log_error_errno(r, "Failed to decide cgroup version to use: Failed to determine systemd version in container: %m");
+                 if (r > 0)
+                         arg_inner_cgver = CGROUP_UNIFIED_ALL;
+                 else
+@@ -379,7 +379,7 @@ static int detect_inner_cgver_from_image(const char *directory, CGroupUnified ou
+                 /* systemd v233+ -style mixed cgroup hierarchy */
+                 r = systemd_installation_has_version(directory, 233);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to determine systemd version in container: %m");
++                        return log_error_errno(r, "Failed to decide cgroup version to use: Failed to determine systemd version in container: %m");
+                 if (r > 0)
+                         arg_inner_cgver = CGROUP_UNIFIED_SYSTEMD233;
+                 else
+-- 
+2.18.0
+

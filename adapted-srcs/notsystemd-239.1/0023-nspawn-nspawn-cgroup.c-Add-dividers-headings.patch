@@ -1,0 +1,58 @@
+From 32815ed4f6e1b38cd05d5a0df7244afc548a2be8 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Fri, 7 Jul 2017 18:57:08 -0400
+Subject: [PATCH 23/38] nspawn: nspawn-cgroup.c: Add dividers/headings
+
+It's against the systemd systemd style guide, but it really helps me
+in maintaining and working on the notsystemd patchset.
+---
+ src/nspawn/nspawn-cgroup.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index c34ae5f360..de4988a39b 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -17,6 +17,10 @@
+ #include "user-util.h"
+ #include "util.h"
+ 
++/* Code for managing the list of CGMounts ***************************/
++
++/* cgroup-util ******************************************************/
++
+ static int chown_cgroup_path(const char *path, uid_t uid_shift) {
+         _cleanup_close_ int fd = -1;
+         const char *fn;
+@@ -43,6 +47,8 @@ static int chown_cgroup_path(const char *path, uid_t uid_shift) {
+         return 0;
+ }
+ 
++/* cgroup_setup *****************************************************/
++
+ static int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         _cleanup_free_ char *path = NULL, *fs = NULL;
+         int r;
+@@ -209,6 +215,8 @@ int cgroup_setup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver
+         return 0;
+ }
+ 
++/* cgroup_decide_mounts *********************************************/
++
+ /* Retrieve a list of cgroup v1 hierarchies. */
+ static int get_v1_hierarchies(Set **ret) {
+         _cleanup_set_free_free_ Set *controllers = NULL;
+@@ -571,6 +579,10 @@ static int mount_unified_cgroups(const char *dest) {
+         return mount_verbose(LOG_ERR, "cgroup", p, "cgroup2", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
+ }
+ 
++/* cgroup_mount_mounts **********************************************/
++
++/* mount_cgroups, mount_systemd_cgroup_writable *********************/
++
+ int mount_cgroups(
+                 const char *dest,
+                 CGroupUnified outer_cgver,
+-- 
+2.18.0
+

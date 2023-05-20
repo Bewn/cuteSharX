@@ -1,0 +1,53 @@
+From 707ac1350afd6a3bc6dd2241c04771d76d7add69 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Thu, 1 Jun 2017 13:59:20 -0400
+Subject: [PATCH 06/38] nspawn: mount_sysfs(): Unconditionally mkdir
+ /sys/fs/cgroup
+
+Currently, mount_sysfs() only creates /sys/fs/cgroup if cg_ns_supported().
+The comment explains that we need to "Create mountpoint for
+cgroups. Otherwise we are not allowed since we remount /sys read-only.";
+that is: that we need to do it now, rather than later.  However, the
+comment doesn't do anything to explain why we only need to do this if
+cg_ns_supported(); shouldn't we _always_ need to do it?
+
+The answer is that if !use_cgns, then this was already done by the outer
+child, so mount_sysfs() only needs to do it if use_cgns.  Now,
+mount_sysfs() doesn't know whether use_cgns, but !cg_ns_supported() implies
+!use_cgns, so we can optimize" the case where we _know_ !use_cgns, and deal
+with a no-op mkdir_p() in the false-positive where cgns_supported() but
+!use_cgns.
+
+But is it really much of an optimization?  We're potentially spending an
+access(2) (cg_ns_supported() could be cached from a previous call) to
+potentially save an lstat(2) and mkdir(2); and all of them are on virtual
+fileystems, so they should all be pretty cheap.
+
+So, simplify and drop the conditional.  It's a dubious optimization that
+requires more text to explain than it's worth.
+
+(cherry picked from commit 677a72cd3efdfde9d544b2d1fe62f352d6d8472c)
+---
+ src/nspawn/nspawn-mount.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/src/nspawn/nspawn-mount.c b/src/nspawn/nspawn-mount.c
+index 46b76b6ade..1279b9bb3e 100644
+--- a/src/nspawn/nspawn-mount.c
++++ b/src/nspawn/nspawn-mount.c
+@@ -429,10 +429,8 @@ int mount_sysfs(const char *dest, MountSettingsMask mount_settings) {
+         /* Create mountpoint for cgroups. Otherwise we are not allowed since we
+          * remount /sys read-only.
+          */
+-        if (cg_ns_supported()) {
+-                x = prefix_roota(top, "/fs/cgroup");
+-                (void) mkdir_p(x, 0755);
+-        }
++        x = prefix_roota(top, "/fs/cgroup");
++        (void) mkdir_p(x, 0755);
+ 
+         return mount_verbose(LOG_ERR, NULL, top, NULL,
+                              MS_BIND|MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_REMOUNT|extra_flags, NULL);
+-- 
+2.18.0
+

@@ -1,0 +1,57 @@
+From 2df0f57d9717837f00684c21db392973524b46f1 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Mon, 23 Jul 2018 22:26:19 -0400
+Subject: [PATCH 33/38] =?UTF-8?q?nspawn:=20Rename=20chown=5Fcgroup=5Fpath?=
+ =?UTF-8?q?=20=E2=86=92=20cgdir=5Fchown?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/nspawn/nspawn-cgroup.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index b6f1323f21..8072ae4651 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -100,7 +100,8 @@ static int cgfile_get_cgroup(FILE *cgfile, const char *opts, char **ret_cgroup)
+         }
+ }
+ 
+-static int chown_cgroup_path(const char *path, uid_t uid_shift) {
++static int cgdir_chown(const char *path, uid_t uid_shift) {
++
+         _cleanup_close_ int fd = -1;
+         const char *fn;
+ 
+@@ -140,7 +141,7 @@ static int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to get file system path for container cgroup: %m");
+ 
+-        r = chown_cgroup_path(fs, uid_shift);
++        r = cgdir_chown(fs, uid_shift);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to chown() cgroup %s: %m", fs);
+ 
+@@ -152,7 +153,7 @@ static int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to get file system path for container cgroup: %m");
+ 
+-                r = chown_cgroup_path(lfs, uid_shift);
++                r = cgdir_chown(lfs, uid_shift);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to chown() cgroup %s: %m", lfs);
+         }
+@@ -208,7 +209,7 @@ static int sync_cgroup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner
+         }
+ 
+         fn = strjoina(mountpoint, cgroup);
+-        r = chown_cgroup_path(fn, uid_shift);
++        r = cgdir_chown(fn, uid_shift);
+         if (r < 0)
+                 log_error_errno(r, "Failed to chown() cgroup %s: %m", fn);
+ finish:
+-- 
+2.18.0
+

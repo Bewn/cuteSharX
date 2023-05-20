@@ -1,0 +1,103 @@
+From 1989f9d3d4a2b5b0daa0c254eebd6a2c2c50f132 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Wed, 14 Jun 2017 20:20:33 -0400
+Subject: [PATCH 19/38] nspawn: mount_legacy_cgns_supported(): Rename variables
+ to not lie
+
+mount_legacy_cgns_supported() is very clearly meant to be a version of
+mount_legacy_cgns_unsupported() modified to cope with the fact that it has
+already chroot()ed, and thus can't look at the host /sys.  So, the loops
+and such look similar.
+
+However, to cope with the fact that it can't look at /sys, it deals with
+hierarchies in the outermost loop, rather than controllers.  Yet, it kept
+the list variable named "controllers".  That's confusing.
+---
+ src/nspawn/nspawn-cgroup.c | 32 +++++++++++++++-----------------
+ 1 file changed, 15 insertions(+), 17 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index b44bf24f3e..a8a47de017 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -209,10 +209,8 @@ int cgroup_setup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver
+         return 0;
+ }
+ 
+-/* Retrieve existing subsystems. This function is called in a new cgroup
+- * namespace.
+- */
+-static int get_process_controllers(Set **ret) {
++/* Retrieve a list of cgroup v1 hierarchies. */
++static int get_v1_hierarchies(Set **ret) {
+         _cleanup_set_free_free_ Set *controllers = NULL;
+         _cleanup_fclose_ FILE *f = NULL;
+         int r;
+@@ -318,7 +316,7 @@ static int mount_legacy_cgns_supported(
+                 uid_t uid_range,
+                 const char *selinux_apifs_context) {
+ 
+-        _cleanup_set_free_free_ Set *controllers = NULL;
++        _cleanup_set_free_free_ Set *hierarchies = NULL;
+         const char *cgroup_root = "/sys/fs/cgroup", *c;
+         int r;
+ 
+@@ -351,18 +349,18 @@ static int mount_legacy_cgns_supported(
+         if (outer_cgver >= CGROUP_UNIFIED_ALL)
+                 goto skip_controllers;
+ 
+-        r = get_process_controllers(&controllers);
++        r = get_v1_hierarchies(&hierarchies);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to determine cgroup controllers: %m");
++                return log_error_errno(r, "Failed to determine cgroup hierarchies: %m");
+ 
+         for (;;) {
+-                _cleanup_free_ const char *controller = NULL;
++                _cleanup_free_ const char *hierarchy = NULL;
+ 
+-                controller = set_steal_first(controllers);
+-                if (!controller)
++                hierarchy = set_steal_first(hierarchies);
++                if (!hierarchy)
+                         break;
+ 
+-                r = mount_legacy_cgroup_hierarchy("", controller, controller, !userns);
++                r = mount_legacy_cgroup_hierarchy("", hierarchy, hierarchy, !userns);
+                 if (r < 0)
+                         return r;
+ 
+@@ -370,24 +368,24 @@ static int mount_legacy_cgns_supported(
+                  * constituting individual hierarchies a symlink to the
+                  * co-mount.
+                  */
+-                c = controller;
++                c = hierarchy;
+                 for (;;) {
+-                        _cleanup_free_ char *target = NULL, *tok = NULL;
++                        _cleanup_free_ char *target = NULL, *controller = NULL;
+ 
+-                        r = extract_first_word(&c, &tok, ",", 0);
++                        r = extract_first_word(&c, &controller, ",", 0);
+                         if (r < 0)
+                                 return log_error_errno(r, "Failed to extract co-mounted cgroup controller: %m");
+                         if (r == 0)
+                                 break;
+ 
+-                        if (streq(controller, tok))
++                        if (streq(hierarchy, controller))
+                                 break;
+ 
+-                        target = prefix_root("/sys/fs/cgroup/", tok);
++                        target = prefix_root("/sys/fs/cgroup/", controller);
+                         if (!target)
+                                 return log_oom();
+ 
+-                        r = symlink_idempotent(controller, target);
++                        r = symlink_idempotent(hierarchy, target);
+                         if (r == -EINVAL)
+                                 return log_error_errno(r, "Invalid existing symlink for combined hierarchy: %m");
+                         if (r < 0)
+-- 
+2.18.0
+

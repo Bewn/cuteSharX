@@ -1,0 +1,305 @@
+From debcec5979ae9eb5a1de11ace30f7da1a0b1fe14 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Mon, 17 Jul 2017 21:11:05 -0400
+Subject: [PATCH 11/38] cgroup-util,nspawn: Use switch cases around
+ CGroupUnified when possible
+
+This replaces a bunch of confusing if/else trees with
+simple-to-reason-about switch blocks that make it absolutely clear what
+happens in each case of the enum.
+
+In nspawn, avoid all of the cg_* functions that query properties of the
+underlying CGroupUnified, and just check cg_version directly.  Even in the
+cases where the checks on it can't be done in a switch statement, it's
+clearer, because it shows the symmetry between inner_cgver and outer_cgver.
+
+This should not change the behavior at all; except that there are a few
+more assert()s on things that shouldn't happen.
+---
+ src/basic/cgroup-util.c    |  15 +++--
+ src/nspawn/nspawn-cgroup.c | 110 ++++++++++++++++++++++++-------------
+ src/nspawn/nspawn.c        |  18 ++++--
+ 3 files changed, 95 insertions(+), 48 deletions(-)
+
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index add784417b..cb3e95bb3e 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2500,13 +2500,18 @@ int cg_unified_controller(const char *controller) {
+         if (r < 0)
+                 return r;
+ 
+-        if (unified_cache == CGROUP_UNIFIED_NONE)
++        switch (unified_cache) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown cgroup version");
++        case CGROUP_UNIFIED_NONE:
+                 return false;
+-
+-        if (unified_cache >= CGROUP_UNIFIED_ALL)
++        case CGROUP_UNIFIED_SYSTEMD232:
++        case CGROUP_UNIFIED_SYSTEMD233:
++                return streq_ptr(controller, SYSTEMD_CGROUP_CONTROLLER);
++        case CGROUP_UNIFIED_ALL:
+                 return true;
+-
+-        return streq_ptr(controller, SYSTEMD_CGROUP_CONTROLLER);
++        }
+ }
+ 
+ int cg_all_unified(void) {
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index cabbba6e14..554253d555 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -80,12 +80,13 @@ int sync_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         char tree[] = "/tmp/unifiedXXXXXX", pid_string[DECIMAL_STR_MAX(pid) + 1];
+         bool undo_mount = false;
+         const char *fn;
+-        int r, unified_controller;
++        CGroupUnified outer_cgver;
++        int r;
+ 
+-        unified_controller = cg_unified_controller(SYSTEMD_CGROUP_CONTROLLER);
+-        if (unified_controller < 0)
+-                return log_error_errno(unified_controller, "Failed to determine whether the systemd hierarchy is unified: %m");
+-        if ((unified_controller > 0) == (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232))
++        r = cg_version(&outer_cgver);
++        if (r < 0)
++                return log_error_errno(r, "Failed to determine whether the systemd hierarchy is unified: %m");
++        if ((outer_cgver >= CGROUP_UNIFIED_SYSTEMD232) == (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232))
+                 return 0;
+ 
+         /* When the host uses the legacy cgroup setup, but the
+@@ -101,7 +102,7 @@ int sync_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         if (!mkdtemp(tree))
+                 return log_error_errno(errno, "Failed to generate temporary mount point for unified hierarchy: %m");
+ 
+-        if (unified_controller > 0)
++        if (outer_cgver >= CGROUP_UNIFIED_SYSTEMD232)
+                 r = mount_verbose(LOG_ERR, "cgroup", tree, "cgroup",
+                                   MS_NOSUID|MS_NOEXEC|MS_NODEV, "none,name=systemd,xattr");
+         else
+@@ -303,6 +304,7 @@ static int mount_legacy_cgns_supported(
+ 
+         _cleanup_set_free_free_ Set *controllers = NULL;
+         const char *cgroup_root = "/sys/fs/cgroup", *c;
++        CGroupUnified outer_cgver;
+         int r;
+ 
+         (void) mkdir_p(cgroup_root, 0755);
+@@ -331,10 +333,10 @@ static int mount_legacy_cgns_supported(
+                         return r;
+         }
+ 
+-        r = cg_all_unified();
++        r = cg_version(&outer_cgver);
+         if (r < 0)
+                 return r;
+-        if (r > 0)
++        if (outer_cgver >= CGROUP_UNIFIED_ALL)
+                 goto skip_controllers;
+ 
+         r = get_process_controllers(&controllers);
+@@ -382,16 +384,26 @@ static int mount_legacy_cgns_supported(
+         }
+ 
+ skip_controllers:
+-        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
++        switch (inner_cgver) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown inner_cgver");
++        case CGROUP_UNIFIED_ALL:
++                assert_not_reached("cgroup v2 requested in cgroup v1 function");
++        case CGROUP_UNIFIED_SYSTEMD232:
++                assert_not_reached("systemd 232-style hybrid not supported");
++        case CGROUP_UNIFIED_SYSTEMD233:
+                 r = mount_legacy_cgroup_hierarchy("", SYSTEMD_CGROUP_CONTROLLER_HYBRID, "unified", false);
+                 if (r < 0)
+                         return r;
++                _fallthrough_;
++        case CGROUP_UNIFIED_NONE:
++                r = mount_legacy_cgroup_hierarchy("", SYSTEMD_CGROUP_CONTROLLER_LEGACY, "systemd", false);
++                if (r < 0)
++                        return r;
++                break;
+         }
+ 
+-        r = mount_legacy_cgroup_hierarchy("", SYSTEMD_CGROUP_CONTROLLER_LEGACY, "systemd", false);
+-        if (r < 0)
+-                return r;
+-
+         if (!userns)
+                 return mount_verbose(LOG_ERR, NULL, cgroup_root, NULL,
+                                      MS_REMOUNT|MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_STRICTATIME|MS_RDONLY, "mode=755");
+@@ -410,6 +422,7 @@ static int mount_legacy_cgns_unsupported(
+ 
+         _cleanup_set_free_free_ Set *controllers = NULL;
+         const char *cgroup_root;
++        CGroupUnified outer_cgver;
+         int r;
+ 
+         cgroup_root = prefix_roota(dest, "/sys/fs/cgroup");
+@@ -433,10 +446,10 @@ static int mount_legacy_cgns_unsupported(
+                         return r;
+         }
+ 
+-        r = cg_all_unified();
++        r = cg_version(&outer_cgver);
+         if (r < 0)
+                 return r;
+-        if (r > 0)
++        if (outer_cgver >= CGROUP_UNIFIED_ALL)
+                 goto skip_controllers;
+ 
+         r = cg_kernel_controllers(&controllers);
+@@ -491,16 +504,26 @@ static int mount_legacy_cgns_unsupported(
+         }
+ 
+ skip_controllers:
+-        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
++        switch (inner_cgver) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown inner_cgver");
++        case CGROUP_UNIFIED_ALL:
++                assert_not_reached("cgroup v2 requested in cgroup v1 function");
++        case CGROUP_UNIFIED_SYSTEMD232:
++                assert_not_reached("systemd 232-style hybrid not supported");
++        case CGROUP_UNIFIED_SYSTEMD233:
+                 r = mount_legacy_cgroup_hierarchy(dest, SYSTEMD_CGROUP_CONTROLLER_HYBRID, "unified", false);
+                 if (r < 0)
+                         return r;
++                _fallthrough_;
++        case CGROUP_UNIFIED_NONE:
++                r = mount_legacy_cgroup_hierarchy(dest, SYSTEMD_CGROUP_CONTROLLER_LEGACY, "systemd", false);
++                if (r < 0)
++                        return r;
++                break;
+         }
+ 
+-        r = mount_legacy_cgroup_hierarchy(dest, SYSTEMD_CGROUP_CONTROLLER_LEGACY, "systemd", false);
+-        if (r < 0)
+-                return r;
+-
+         return mount_verbose(LOG_ERR, NULL, cgroup_root, NULL,
+                              MS_REMOUNT|MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_STRICTATIME|MS_RDONLY, "mode=755");
+ }
+@@ -541,12 +564,20 @@ int mount_cgroups(
+                 const char *selinux_apifs_context,
+                 bool use_cgns) {
+ 
+-        if (inner_cgver >= CGROUP_UNIFIED_ALL)
++        switch (inner_cgver) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown inner_cgver");
++        case CGROUP_UNIFIED_NONE:
++        case CGROUP_UNIFIED_SYSTEMD232:
++        case CGROUP_UNIFIED_SYSTEMD233:
++                if (use_cgns)
++                        return mount_legacy_cgns_supported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
++                else
++                        return mount_legacy_cgns_unsupported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
++        case CGROUP_UNIFIED_ALL:
+                 return mount_unified_cgroups(dest);
+-        if (use_cgns)
+-                return mount_legacy_cgns_supported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
+-
+-        return mount_legacy_cgns_unsupported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
++        }
+ }
+ 
+ static int mount_systemd_cgroup_writable_one(const char *root, const char *own) {
+@@ -583,22 +614,23 @@ int mount_systemd_cgroup_writable(
+         if (path_equal(own_cgroup_path, "/"))
+                 return 0;
+ 
+-        if (inner_cgver >= CGROUP_UNIFIED_ALL) {
+-
++        switch (inner_cgver) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown inner_cgver");
++        case CGROUP_UNIFIED_ALL:
+                 root = prefix_roota(dest, "/sys/fs/cgroup");
+                 own = strjoina(root, own_cgroup_path);
+-
+-        } else {
+-
+-                if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
+-                        root = prefix_roota(dest, "/sys/fs/cgroup/unified");
+-                        own = strjoina(root, own_cgroup_path);
+-
+-                        r = mount_systemd_cgroup_writable_one(root, own);
+-                        if (r < 0)
+-                                return r;
+-                }
+-
++                break;
++        case CGROUP_UNIFIED_SYSTEMD233:
++        case CGROUP_UNIFIED_SYSTEMD232:
++                root = prefix_roota(dest, "/sys/fs/cgroup/unified");
++                own = strjoina(root, own_cgroup_path);
++                r = mount_systemd_cgroup_writable_one(root, own);
++                if (r < 0)
++                        return r;
++                _fallthrough_;
++        case CGROUP_UNIFIED_NONE:
+                 root = prefix_roota(dest, "/sys/fs/cgroup/systemd");
+                 own = strjoina(root, own_cgroup_path);
+         }
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index f19801342d..fc6cb60e94 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -344,13 +344,18 @@ static int detect_inner_cgver_from_environment(void) {
+ 
+ static int detect_inner_cgver_from_image(const char *directory) {
+         int r;
++        CGroupUnified outer_cgver;
+ 
+         /* Let's inherit the mode to use from the host system, but let's take into consideration what systemd in the
+          * image actually supports. */
+-        r = cg_all_unified();
++        r = cg_version(&outer_cgver);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to determine whether we are in all unified mode.");
+-        if (r > 0) {
++        switch (outer_cgver) {
++        default:
++        case CGROUP_UNIFIED_UNKNOWN:
++                assert_not_reached("unknown cgroup version");
++        case CGROUP_UNIFIED_ALL:
+                 /* Unified cgroup hierarchy support was added in 230. Unfortunately the detection
+                  * routine only detects 231, so we'll have a false negative here for 230. */
+                 r = systemd_installation_has_version(directory, 230);
+@@ -360,7 +365,9 @@ static int detect_inner_cgver_from_image(const char *directory) {
+                         arg_inner_cgver = CGROUP_UNIFIED_ALL;
+                 else
+                         arg_inner_cgver = CGROUP_UNIFIED_NONE;
+-        } else if (cg_unified_controller(SYSTEMD_CGROUP_CONTROLLER) > 0) {
++                break;
++        case CGROUP_UNIFIED_SYSTEMD233:
++        case CGROUP_UNIFIED_SYSTEMD232:
+                 /* Mixed cgroup hierarchy support was added in 233 */
+                 r = systemd_installation_has_version(directory, 233);
+                 if (r < 0)
+@@ -369,8 +376,11 @@ static int detect_inner_cgver_from_image(const char *directory) {
+                         arg_inner_cgver = CGROUP_UNIFIED_SYSTEMD233;
+                 else
+                         arg_inner_cgver = CGROUP_UNIFIED_NONE;
+-        } else
++                break;
++        case CGROUP_UNIFIED_NONE:
+                 arg_inner_cgver = CGROUP_UNIFIED_NONE;
++                break;
++        }
+ 
+         log_debug("Using %s hierarchy for container.",
+                   arg_inner_cgver == CGROUP_UNIFIED_NONE ? "legacy" :
+-- 
+2.18.0
+

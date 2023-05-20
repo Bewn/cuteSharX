@@ -1,0 +1,290 @@
+From f0dc4ed9507639acb1310b8174f69f7a039eef39 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Mon, 17 Jul 2017 21:36:16 -0400
+Subject: [PATCH 17/38] nspawn: Detect the outer_cgver once, and pass that
+ around
+
+Yes, the relevant functions in cgroup-util actually do cache the values
+with static variables, so we aren't saving any time by avoiding lookups.
+But passing it around as a value makes the flow much nicer, I think; and it
+makes it clearer when we can expect it to fail.
+
+This moves the call to cg_*() out of parse_argv(), to main(), right
+after it calls parse_argv(); since main() is the function that
+ultimately needs the value from cg_version().
+---
+ src/nspawn/nspawn-cgroup.c | 23 +++++++----------------
+ src/nspawn/nspawn-cgroup.h |  6 +++---
+ src/nspawn/nspawn.c        | 38 ++++++++++++++++++++++----------------
+ 3 files changed, 32 insertions(+), 35 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index 9b8f8f4e22..1150d3b4c2 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -75,17 +75,13 @@ int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         return 0;
+ }
+ 
+-int sync_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
++int sync_cgroup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift) {
+         _cleanup_free_ char *cgroup = NULL;
+         char tree[] = "/tmp/unifiedXXXXXX", pid_string[DECIMAL_STR_MAX(pid) + 1];
+         bool undo_mount = false;
+         const char *fn;
+-        CGroupUnified outer_cgver;
+         int r;
+ 
+-        r = cg_version(&outer_cgver);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to determine whether the systemd hierarchy is unified: %m");
+         if ((outer_cgver >= CGROUP_UNIFIED_SYSTEMD232) == (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232))
+                 return 0;
+ 
+@@ -141,7 +137,7 @@ finish:
+         return r;
+ }
+ 
+-int create_subcgroup(pid_t pid, bool keep_unit, CGroupUnified inner_cgver) {
++int create_subcgroup(pid_t pid, bool keep_unit, CGroupUnified outer_cgver, CGroupUnified inner_cgver) {
+         _cleanup_free_ char *cgroup = NULL;
+         CGroupMask supported;
+         const char *payload;
+@@ -296,6 +292,7 @@ static int mount_legacy_cgroup_hierarchy(
+ /* Mount a legacy cgroup hierarchy when cgroup namespaces are supported. */
+ static int mount_legacy_cgns_supported(
+                 const char *dest,
++                CGroupUnified outer_cgver,
+                 CGroupUnified inner_cgver,
+                 bool userns,
+                 uid_t uid_shift,
+@@ -304,7 +301,6 @@ static int mount_legacy_cgns_supported(
+ 
+         _cleanup_set_free_free_ Set *controllers = NULL;
+         const char *cgroup_root = "/sys/fs/cgroup", *c;
+-        CGroupUnified outer_cgver;
+         int r;
+ 
+         (void) mkdir_p(cgroup_root, 0755);
+@@ -333,9 +329,6 @@ static int mount_legacy_cgns_supported(
+                         return r;
+         }
+ 
+-        r = cg_version(&outer_cgver);
+-        if (r < 0)
+-                return r;
+         if (outer_cgver >= CGROUP_UNIFIED_ALL)
+                 goto skip_controllers;
+ 
+@@ -417,6 +410,7 @@ skip_controllers:
+ /* Mount legacy cgroup hierarchy when cgroup namespaces are unsupported. */
+ static int mount_legacy_cgns_unsupported(
+                 const char *dest,
++                CGroupUnified outer_cgver,
+                 CGroupUnified inner_cgver,
+                 bool userns,
+                 uid_t uid_shift,
+@@ -425,7 +419,6 @@ static int mount_legacy_cgns_unsupported(
+ 
+         _cleanup_set_free_free_ Set *controllers = NULL;
+         const char *cgroup_root;
+-        CGroupUnified outer_cgver;
+         int r;
+ 
+         cgroup_root = prefix_roota(dest, "/sys/fs/cgroup");
+@@ -449,9 +442,6 @@ static int mount_legacy_cgns_unsupported(
+                         return r;
+         }
+ 
+-        r = cg_version(&outer_cgver);
+-        if (r < 0)
+-                return r;
+         if (outer_cgver >= CGROUP_UNIFIED_ALL)
+                 goto skip_controllers;
+ 
+@@ -563,6 +553,7 @@ static int mount_unified_cgroups(const char *dest) {
+ 
+ int mount_cgroups(
+                 const char *dest,
++                CGroupUnified outer_cgver,
+                 CGroupUnified inner_cgver,
+                 bool userns,
+                 uid_t uid_shift,
+@@ -578,9 +569,9 @@ int mount_cgroups(
+         case CGROUP_UNIFIED_SYSTEMD232:
+         case CGROUP_UNIFIED_SYSTEMD233:
+                 if (use_cgns)
+-                        return mount_legacy_cgns_supported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
++                        return mount_legacy_cgns_supported(dest, outer_cgver, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
+                 else
+-                        return mount_legacy_cgns_unsupported(dest, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
++                        return mount_legacy_cgns_unsupported(dest, outer_cgver, inner_cgver, userns, uid_shift, uid_range, selinux_apifs_context);
+         case CGROUP_UNIFIED_ALL:
+                 return mount_unified_cgroups(dest);
+         }
+diff --git a/src/nspawn/nspawn-cgroup.h b/src/nspawn/nspawn-cgroup.h
+index aaa9368338..e4ff6b5269 100644
+--- a/src/nspawn/nspawn-cgroup.h
++++ b/src/nspawn/nspawn-cgroup.h
+@@ -7,8 +7,8 @@
+ #include "cgroup-util.h"
+ 
+ int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift);
+-int sync_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift);
+-int create_subcgroup(pid_t pid, bool keep_unit, CGroupUnified inner_cgver);
++int sync_cgroup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift);
++int create_subcgroup(pid_t pid, bool keep_unit, CGroupUnified outer_cgver, CGroupUnified inner_cgver);
+ 
+-int mount_cgroups(const char *dest, CGroupUnified inner_cgver, bool userns, uid_t uid_shift, uid_t uid_range, const char *selinux_apifs_context, bool use_cgns);
++int mount_cgroups(const char *dest, CGroupUnified outer_cgver, CGroupUnified inner_cgver, bool userns, uid_t uid_shift, uid_t uid_range, const char *selinux_apifs_context, bool use_cgns);
+ int mount_systemd_cgroup_writable(const char *dest, CGroupUnified inner_cgver);
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index 24f47fa636..2f49dc03ee 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -341,15 +341,11 @@ static void parse_inner_cgver_env(void) {
+         }
+ }
+ 
+-static int detect_inner_cgver_from_image(const char *directory) {
++static int detect_inner_cgver_from_image(const char *directory, CGroupUnified outer_cgver) {
+         int r;
+-        CGroupUnified outer_cgver;
+ 
+         /* By default, inherit from the host system, unless the container doesn't have a new enough systemd (detected
+          * by checking libsystemd-shared). */
+-        r = cg_version(&outer_cgver);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to determine whether we are in all unified mode.");
+         switch (outer_cgver) {
+         default:
+         case CGROUP_UNIFIED_UNKNOWN:
+@@ -1368,10 +1364,6 @@ static int parse_argv(int argc, char *argv[]) {
+ 
+         arg_caps_retain = (arg_caps_retain | plus | (arg_private_network ? 1ULL << CAP_NET_ADMIN : 0)) & ~minus;
+ 
+-        r = cg_unified_flush();
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to determine whether the unified cgroups hierarchy is used: %m");
+-
+         e = getenv("SYSTEMD_NSPAWN_CONTAINER_SERVICE");
+         if (e)
+                 arg_container_service_name = e;
+@@ -2534,7 +2526,8 @@ static int inner_child(
+                 bool secondary,
+                 int kmsg_socket,
+                 int rtnl_socket,
+-                FDSet *fds) {
++                FDSet *fds,
++                CGroupUnified outer_cgver) {
+ 
+         _cleanup_free_ char *home = NULL;
+         char as_uuid[37];
+@@ -2608,6 +2601,7 @@ static int inner_child(
+                         return log_error_errno(errno, "Failed to unshare cgroup namespace: %m");
+                 r = mount_cgroups(
+                                 "",
++                                outer_cgver,
+                                 arg_inner_cgver,
+                                 arg_userns_mode != USER_NAMESPACE_NO,
+                                 arg_uid_shift,
+@@ -2833,7 +2827,8 @@ static int outer_child(
+                 int uid_shift_socket,
+                 int inner_cgver_socket,
+                 FDSet *fds,
+-                int netns_fd) {
++                int netns_fd,
++                CGroupUnified outer_cgver) {
+ 
+         _cleanup_close_ int fd = -1;
+         int r, which_failed;
+@@ -2935,7 +2930,7 @@ static int outer_child(
+         if (arg_inner_cgver == CGROUP_UNIFIED_UNKNOWN) {
+                 /* OK, we don't know yet which cgroup mode to use yet. Let's figure it out, and tell the parent. */
+ 
+-                r = detect_inner_cgver_from_image(directory);
++                r = detect_inner_cgver_from_image(directory, outer_cgver);
+                 if (r < 0)
+                         return r;
+ 
+@@ -3069,6 +3064,7 @@ static int outer_child(
+         if (!arg_use_cgns) {
+                 r = mount_cgroups(
+                                 directory,
++                                outer_cgver,
+                                 arg_inner_cgver,
+                                 arg_userns_mode != USER_NAMESPACE_NO,
+                                 arg_uid_shift,
+@@ -3112,7 +3108,7 @@ static int outer_child(
+                                 return r;
+                 }
+ 
+-                r = inner_child(barrier, directory, secondary, kmsg_socket, rtnl_socket, fds);
++                r = inner_child(barrier, directory, secondary, kmsg_socket, rtnl_socket, fds, outer_cgver);
+                 if (r < 0)
+                         _exit(EXIT_FAILURE);
+ 
+@@ -3625,6 +3621,7 @@ static int run(int master,
+                DissectedImage *dissected_image,
+                bool interactive,
+                bool secondary,
++               CGroupUnified outer_cgver,
+                FDSet *fds,
+                char veth_name[IFNAMSIZ], bool *veth_created,
+                union in_addr_union *exposed,
+@@ -3764,7 +3761,8 @@ static int run(int master,
+                                 uid_shift_socket_pair[1],
+                                 inner_cgver_socket_pair[1],
+                                 fds,
+-                                netns_fd);
++                                netns_fd,
++                                outer_cgver);
+                 if (r < 0)
+                         _exit(EXIT_FAILURE);
+ 
+@@ -3981,11 +3979,11 @@ static int run(int master,
+         } else if (arg_slice || arg_property)
+                 log_notice("Machine and scope registration turned off, --slice= and --property= settings will have no effect.");
+ 
+-        r = sync_cgroup(*pid, arg_inner_cgver, arg_uid_shift);
++        r = sync_cgroup(*pid, outer_cgver, arg_inner_cgver, arg_uid_shift);
+         if (r < 0)
+                 return r;
+ 
+-        r = create_subcgroup(*pid, arg_keep_unit, arg_inner_cgver);
++        r = create_subcgroup(*pid, arg_keep_unit, outer_cgver, arg_inner_cgver);
+         if (r < 0)
+                 return r;
+ 
+@@ -4203,6 +4201,7 @@ int main(int argc, char *argv[]) {
+         _cleanup_(loop_device_unrefp) LoopDevice *loop = NULL;
+         _cleanup_(decrypted_image_unrefp) DecryptedImage *decrypted_image = NULL;
+         _cleanup_(dissected_image_unrefp) DissectedImage *dissected_image = NULL;
++        CGroupUnified outer_cgver;
+ 
+         log_parse_environment();
+         log_open();
+@@ -4215,6 +4214,12 @@ int main(int argc, char *argv[]) {
+         if (r <= 0)
+                 goto finish;
+ 
++        r = cg_version(&outer_cgver);
++        if (r < 0) {
++                log_error_errno(r, "Failed to determine whether the unified cgroups hierarchy is used: %m");
++                goto finish;
++        }
++
+         r = must_be_root();
+         if (r < 0)
+                 goto finish;
+@@ -4525,6 +4530,7 @@ int main(int argc, char *argv[]) {
+                         console,
+                         dissected_image,
+                         interactive, secondary,
++                        outer_cgver,
+                         fds,
+                         veth_name, &veth_created,
+                         &exposed,
+-- 
+2.18.0
+

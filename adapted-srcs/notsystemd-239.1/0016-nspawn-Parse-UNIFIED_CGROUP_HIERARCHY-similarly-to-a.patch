@@ -1,0 +1,67 @@
+From 8c547ffbd81ad4c054004fdfb4949c1b68cb5549 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Tue, 13 Jun 2017 22:27:40 -0400
+Subject: [PATCH 16/38] nspawn: Parse UNIFIED_CGROUP_HIERARCHY similarly to any
+ other arg
+
+---
+ src/nspawn/nspawn.c | 19 ++++++++-----------
+ 1 file changed, 8 insertions(+), 11 deletions(-)
+
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index d698cc8ad8..24f47fa636 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -323,23 +323,22 @@ static int custom_mount_check_all(void) {
+         return 0;
+ }
+ 
+-static int detect_inner_cgver_from_environment(void) {
++static void parse_inner_cgver_env(void) {
+         const char *e;
+         int r;
+ 
+-        /* Allow the user to control whether the unified hierarchy is used */
+         e = getenv("UNIFIED_CGROUP_HIERARCHY");
+         if (e) {
+                 r = parse_boolean(e);
+-                if (r < 0)
+-                        return log_error_errno(r, "Failed to parse $UNIFIED_CGROUP_HIERARCHY.");
+-                if (r > 0)
++                if (r < 0) {
++                        log_warning_errno(r, "Failed to parse UNIFIED_CGROUP_HIERARCHY from environment, ignoring.");
++                        arg_inner_cgver = CGROUP_UNIFIED_UNKNOWN;
++                        return;
++                } else if (r > 0)
+                         arg_inner_cgver = CGROUP_UNIFIED_ALL;
+                 else
+                         arg_inner_cgver = CGROUP_UNIFIED_NONE;
+         }
+-
+-        return 0;
+ }
+ 
+ static int detect_inner_cgver_from_image(const char *directory) {
+@@ -1268,6 +1267,8 @@ static int parse_argv(int argc, char *argv[]) {
+                 return -EINVAL;
+         }
+ 
++        parse_inner_cgver_env();
++
+         parse_share_ns_env("SYSTEMD_NSPAWN_SHARE_NS_IPC", CLONE_NEWIPC);
+         parse_share_ns_env("SYSTEMD_NSPAWN_SHARE_NS_PID", CLONE_NEWPID);
+         parse_share_ns_env("SYSTEMD_NSPAWN_SHARE_NS_UTS", CLONE_NEWUTS);
+@@ -4234,10 +4235,6 @@ int main(int argc, char *argv[]) {
+         if (r < 0)
+                 goto finish;
+ 
+-        r = detect_inner_cgver_from_environment();
+-        if (r < 0)
+-                goto finish;
+-
+         n_fd_passed = sd_listen_fds(false);
+         if (n_fd_passed > 0) {
+                 r = fdset_new_listen_fds(&fds, false);
+-- 
+2.18.0
+

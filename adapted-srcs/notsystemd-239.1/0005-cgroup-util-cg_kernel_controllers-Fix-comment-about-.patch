@@ -1,0 +1,40 @@
+From bd5b2c34cc5477b84abb89e7890a08eb103f4d3d Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Sat, 10 Jun 2017 00:06:45 -0400
+Subject: [PATCH 05/38] cgroup-util: cg_kernel_controllers(): Fix comment about
+ including "name="
+
+Remove "arbitrary named hierarchies" from the list of things that
+cg_kernel_controllers() might return, and clarify that "name="
+pseudo-controllers are not included in the returned list.
+
+/proc/cgroups does not contain "name=" pseudo-controllers, and
+cg_kernel_controllers() makes no effort to enumerate them via a different
+mechanism.
+
+(cherry picked from commit f09e86bcaa012d64addd2314fa6054657a02f64c)
+---
+ src/basic/cgroup-util.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 038ece4b06..daa15dbfcb 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2384,10 +2384,9 @@ int cg_kernel_controllers(Set **ret) {
+ 
+         assert(ret);
+ 
+-        /* Determines the full list of kernel-known controllers. Might
+-         * include controllers we don't actually support, arbitrary
+-         * named hierarchies and controllers that aren't currently
+-         * accessible (because not mounted). */
++        /* Determines the full list of kernel-known controllers. Might include controllers we don't actually support
++         * and controllers that aren't currently accessible (because not mounted). This does not include "name="
++         * pseudo-controllers. */
+ 
+         controllers = set_new(&string_hash_ops);
+         if (!controllers)
+-- 
+2.18.0
+

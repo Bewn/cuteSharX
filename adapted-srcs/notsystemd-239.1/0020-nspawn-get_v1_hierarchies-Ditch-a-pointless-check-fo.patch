@@ -1,0 +1,31 @@
+From 91bfac8993afe051424cf55a24d1104d602e4cc1 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Fri, 14 Jul 2017 23:16:36 -0400
+Subject: [PATCH 20/38] nspawn: get_v1_hierarchies(): Ditch a pointless check
+ for "name=unified"
+
+name=unified isn't a real v1 hierarchy, it's just a made-up name to refer
+to the v2 hierarchy with a v1-looking string.  It will never show up when
+we ask the kernel for a list of v1 hierarchies.  It looks like Tejun Heo
+just grepped for all uses of "name=systemd" when he introduced name=unified
+in 2977724b09eb997fc84a80517447b5d4a70770c7.
+---
+ src/nspawn/nspawn-cgroup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index a8a47de017..c91779ea85 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -246,7 +246,7 @@ static int get_v1_hierarchies(Set **ret) {
+ 
+                 *e = 0;
+ 
+-                if (STR_IN_SET(l, "", "name=systemd", "name=unified"))
++                if (STR_IN_SET(l, "", "name=systemd"))
+                         continue;
+ 
+                 r = set_put_strdup(controllers, l);
+-- 
+2.18.0
+

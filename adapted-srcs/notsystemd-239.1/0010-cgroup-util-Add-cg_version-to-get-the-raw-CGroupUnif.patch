@@ -1,0 +1,48 @@
+From ab2c89cbfb00b90006a88833dbc3ed3a46069ae5 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Sat, 20 May 2017 20:26:36 -0400
+Subject: [PATCH 10/38] cgroup-util: Add cg_version() to get the raw
+ CGroupUnified enum
+
+---
+ src/basic/cgroup-util.c | 11 +++++++++++
+ src/basic/cgroup-util.h |  1 +
+ 2 files changed, 12 insertions(+)
+
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 76aac86142..add784417b 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2535,6 +2535,17 @@ int cg_unified_flush(void) {
+         return cg_unified_update();
+ }
+ 
++int cg_version(CGroupUnified *ver) {
++        int r;
++
++        r = cg_unified_update();
++        if (r < 0)
++                return r;
++
++        *ver = unified_cache;
++        return 0;
++}
++
+ int cg_enable_everywhere(CGroupMask supported, CGroupMask mask, const char *p) {
+         _cleanup_fclose_ FILE *f = NULL;
+         _cleanup_free_ char *fs = NULL;
+diff --git a/src/basic/cgroup-util.h b/src/basic/cgroup-util.h
+index c9e11f3b78..82999337db 100644
+--- a/src/basic/cgroup-util.h
++++ b/src/basic/cgroup-util.h
+@@ -232,6 +232,7 @@ int cg_all_unified(void);
+ int cg_hybrid_unified(void);
+ int cg_unified_controller(const char *controller);
+ int cg_unified_flush(void);
++int cg_version(CGroupUnified *ver);
+ 
+ bool cg_is_unified_wanted(void);
+ bool cg_is_legacy_wanted(void);
+-- 
+2.18.0
+

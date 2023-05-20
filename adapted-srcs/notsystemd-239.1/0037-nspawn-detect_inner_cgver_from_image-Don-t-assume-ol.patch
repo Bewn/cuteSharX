@@ -1,0 +1,53 @@
+From 8bd5907fcf8630ecf902e074f4a8813f24415720 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Sun, 22 Jul 2018 17:15:58 +0000
+Subject: [PATCH 37/38] nspawn: detect_inner_cgver_from_image(): Don't assume
+ old systemd
+
+---
+ src/nspawn/nspawn.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index ca827844db..e6078df0e9 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -360,6 +360,18 @@ static void parse_inner_cgver_env(void) {
+ static int detect_inner_cgver_from_image(const char *directory, CGroupUnified outer_cgver) {
+         int r;
+ 
++        /* The upstream systemd version of this function assumes that all containers are systemd containers; and that
++         * if it can't sniff the systemd version, then it's systemd<=230 (as the earliest version it can sniff is 231).
++         * That means that making this function Do The Right Thing for modern (cgroup-v2-capable) non-systemd
++         * containers by default means making it Do The Wrong Thing for systemd<231 (<2016-07-25) containers by
++         * default. */
++        if (systemd_installation_has_version(directory, 231) <= 0) {
++                arg_inner_cgver = CGROUP_UNIFIED_INHERIT;
++                goto success;
++        }
++        /* That means the following code is only useful for systemd=231 (2016-07-25) and systemd=232 (2016-11-03)
++         * containers. */
++
+         /* By default, inherit from the host system, unless the container doesn't have a new enough systemd (detected
+          * by checking libsystemd-shared). */
+         switch (outer_cgver) {
+@@ -371,8 +383,6 @@ static int detect_inner_cgver_from_image(const char *directory, CGroupUnified ou
+                 arg_inner_cgver = CGROUP_UNIFIED_INHERIT;
+                 break;
+         case CGROUP_UNIFIED_ALL:
+-                /* Unified cgroup hierarchy support was added in 230.  Unfortunately, libsystemd-shared (which we use
+-                 * to sniff the systemd version) was only added in 231, so we'll have a false negative here for 230. */
+                 r = systemd_installation_has_version(directory, 230);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to decide cgroup version to use: Failed to determine systemd version in container: %m");
+@@ -406,6 +416,7 @@ static int detect_inner_cgver_from_image(const char *directory, CGroupUnified ou
+                 break;
+         }
+ 
++ success:
+         log_debug("Using %s hierarchy for container.",
+                   arg_inner_cgver == CGROUP_UNIFIED_NONE ? "legacy" :
+                   arg_inner_cgver == CGROUP_UNIFIED_SYSTEMD233 ? "hybrid" : "unified");
+-- 
+2.18.0
+

@@ -1,0 +1,183 @@
+From 70aa966421f0c53f4024aea8de20bbe6eee13bf8 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Fri, 7 Jul 2017 01:20:02 -0400
+Subject: [PATCH 09/38] cgroup-util: Merge the unified_cache and
+ unified_systemd_v232 caches
+
+Conceptually, the addition of bool unified_systemd_v232 split
+CGROUP_UNIFIED_SYSTEMD in to two separate values.  So, split it.
+
+The "tricky" part is when to switch the old CGROUP_UNIFIED_SYSTEMD to
+CGROUP_UNIFIED_SYSTEMD232 and when to switch it to
+CGROUP_UNIFIED_SYSTEMD233.  All ">= CGROUP_UNIFIED_SYSTEMD" checks go to
+232, since that preserves the existing behavior.
+---
+ meson.build                |  2 +-
+ src/basic/cgroup-util.c    | 21 ++++-----------------
+ src/basic/cgroup-util.h    |  5 +++--
+ src/nspawn/nspawn-cgroup.c | 10 +++++-----
+ src/nspawn/nspawn.c        |  4 ++--
+ 5 files changed, 15 insertions(+), 27 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 04331dd41a..e8e9eef31c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -618,7 +618,7 @@ conf.set_quoted('DEFAULT_HIERARCHY_NAME', default_hierarchy,
+ if default_hierarchy == 'legacy'
+         conf.set('DEFAULT_HIERARCHY', 'CGROUP_UNIFIED_NONE')
+ elif default_hierarchy == 'hybrid'
+-        conf.set('DEFAULT_HIERARCHY', 'CGROUP_UNIFIED_SYSTEMD')
++        conf.set('DEFAULT_HIERARCHY', 'CGROUP_UNIFIED_SYSTEMD233')
+ else
+         conf.set('DEFAULT_HIERARCHY', 'CGROUP_UNIFIED_ALL')
+ endif
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index daa15dbfcb..76aac86142 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2445,17 +2445,6 @@ int cg_kernel_controllers(Set **ret) {
+ 
+ static thread_local CGroupUnified unified_cache = CGROUP_UNIFIED_UNKNOWN;
+ 
+-/* The hybrid mode was initially implemented in v232 and simply mounted cgroup v2 on /sys/fs/cgroup/systemd.  This
+- * unfortunately broke other tools (such as docker) which expected the v1 "name=systemd" hierarchy on
+- * /sys/fs/cgroup/systemd.  From v233 and on, the hybrid mode mountnbs v2 on /sys/fs/cgroup/unified and maintains
+- * "name=systemd" hierarchy on /sys/fs/cgroup/systemd for compatibility with other tools.
+- *
+- * To keep live upgrade working, we detect and support v232 layout.  When v232 layout is detected, to keep cgroup v2
+- * process management but disable the compat dual layout, we return %true on
+- * cg_unified_controller(SYSTEMD_CGROUP_CONTROLLER) and %false on cg_hybrid_unified().
+- */
+-static thread_local bool unified_systemd_v232;
+-
+ static int cg_unified_update(void) {
+ 
+         struct statfs fs;
+@@ -2478,16 +2467,14 @@ static int cg_unified_update(void) {
+                 if (statfs("/sys/fs/cgroup/unified/", &fs) == 0 &&
+                     F_TYPE_EQUAL(fs.f_type, CGROUP2_SUPER_MAGIC)) {
+                         log_debug("Found cgroup2 on /sys/fs/cgroup/unified, unified hierarchy for systemd controller");
+-                        unified_cache = CGROUP_UNIFIED_SYSTEMD;
+-                        unified_systemd_v232 = false;
++                        unified_cache = CGROUP_UNIFIED_SYSTEMD233;
+                 } else {
+                         if (statfs("/sys/fs/cgroup/systemd/", &fs) < 0)
+                                 return log_debug_errno(errno, "statfs(\"/sys/fs/cgroup/systemd\" failed: %m");
+ 
+                         if (F_TYPE_EQUAL(fs.f_type, CGROUP2_SUPER_MAGIC)) {
+                                 log_debug("Found cgroup2 on /sys/fs/cgroup/systemd, unified hierarchy for systemd controller (v232 variant)");
+-                                unified_cache = CGROUP_UNIFIED_SYSTEMD;
+-                                unified_systemd_v232 = true;
++                                unified_cache = CGROUP_UNIFIED_SYSTEMD232;
+                         } else if (F_TYPE_EQUAL(fs.f_type, CGROUP_SUPER_MAGIC)) {
+                                 log_debug("Found cgroup on /sys/fs/cgroup/systemd, legacy hierarchy");
+                                 unified_cache = CGROUP_UNIFIED_NONE;
+@@ -2539,7 +2526,7 @@ int cg_hybrid_unified(void) {
+         if (r < 0)
+                 return r;
+ 
+-        return unified_cache == CGROUP_UNIFIED_SYSTEMD && !unified_systemd_v232;
++        return unified_cache == CGROUP_UNIFIED_SYSTEMD233;
+ }
+ 
+ int cg_unified_flush(void) {
+@@ -2645,7 +2632,7 @@ bool cg_is_hybrid_wanted(void) {
+         static thread_local int wanted = -1;
+         int r;
+         bool b;
+-        const bool is_default = DEFAULT_HIERARCHY >= CGROUP_UNIFIED_SYSTEMD;
++        const bool is_default = DEFAULT_HIERARCHY >= CGROUP_UNIFIED_SYSTEMD232;
+         /* We default to true if the default is "hybrid", obviously,
+          * but also when the default is "unified", because if we get
+          * called, it means that unified hierarchy was not mounted. */
+diff --git a/src/basic/cgroup-util.h b/src/basic/cgroup-util.h
+index 1a28a8163a..c9e11f3b78 100644
+--- a/src/basic/cgroup-util.h
++++ b/src/basic/cgroup-util.h
+@@ -106,8 +106,9 @@ static inline bool CGROUP_BLKIO_WEIGHT_IS_OK(uint64_t x) {
+ typedef enum CGroupUnified {
+         CGROUP_UNIFIED_UNKNOWN = -1,
+         CGROUP_UNIFIED_NONE = 0,        /* Both systemd and controllers on legacy */
+-        CGROUP_UNIFIED_SYSTEMD = 1,     /* Only systemd on unified */
+-        CGROUP_UNIFIED_ALL = 2,         /* Both systemd and controllers on unified */
++        CGROUP_UNIFIED_SYSTEMD232 = 1,  /* Only systemd on unified, as done by SD232 */
++        CGROUP_UNIFIED_SYSTEMD233 = 2,  /* Only systemd on unified, as done by SD233+ */
++        CGROUP_UNIFIED_ALL = 3,         /* Both systemd and controllers on unified */
+ } CGroupUnified;
+ 
+ /*
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index fde8e67353..cabbba6e14 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -59,7 +59,7 @@ int chown_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to chown() cgroup %s: %m", fs);
+ 
+-        if (inner_cgver == CGROUP_UNIFIED_SYSTEMD) {
++        if (inner_cgver == CGROUP_UNIFIED_SYSTEMD233) {
+                 _cleanup_free_ char *lfs = NULL;
+                 /* Always propagate access rights from unified to legacy controller */
+ 
+@@ -85,7 +85,7 @@ int sync_cgroup(pid_t pid, CGroupUnified inner_cgver, uid_t uid_shift) {
+         unified_controller = cg_unified_controller(SYSTEMD_CGROUP_CONTROLLER);
+         if (unified_controller < 0)
+                 return log_error_errno(unified_controller, "Failed to determine whether the systemd hierarchy is unified: %m");
+-        if ((unified_controller > 0) == (inner_cgver >= CGROUP_UNIFIED_SYSTEMD))
++        if ((unified_controller > 0) == (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232))
+                 return 0;
+ 
+         /* When the host uses the legacy cgroup setup, but the
+@@ -382,7 +382,7 @@ static int mount_legacy_cgns_supported(
+         }
+ 
+ skip_controllers:
+-        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD) {
++        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
+                 r = mount_legacy_cgroup_hierarchy("", SYSTEMD_CGROUP_CONTROLLER_HYBRID, "unified", false);
+                 if (r < 0)
+                         return r;
+@@ -491,7 +491,7 @@ static int mount_legacy_cgns_unsupported(
+         }
+ 
+ skip_controllers:
+-        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD) {
++        if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
+                 r = mount_legacy_cgroup_hierarchy(dest, SYSTEMD_CGROUP_CONTROLLER_HYBRID, "unified", false);
+                 if (r < 0)
+                         return r;
+@@ -590,7 +590,7 @@ int mount_systemd_cgroup_writable(
+ 
+         } else {
+ 
+-                if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD) {
++                if (inner_cgver >= CGROUP_UNIFIED_SYSTEMD232) {
+                         root = prefix_roota(dest, "/sys/fs/cgroup/unified");
+                         own = strjoina(root, own_cgroup_path);
+ 
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index 454df8693d..f19801342d 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -366,7 +366,7 @@ static int detect_inner_cgver_from_image(const char *directory) {
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to determine systemd version in container: %m");
+                 if (r > 0)
+-                        arg_inner_cgver = CGROUP_UNIFIED_SYSTEMD;
++                        arg_inner_cgver = CGROUP_UNIFIED_SYSTEMD233;
+                 else
+                         arg_inner_cgver = CGROUP_UNIFIED_NONE;
+         } else
+@@ -374,7 +374,7 @@ static int detect_inner_cgver_from_image(const char *directory) {
+ 
+         log_debug("Using %s hierarchy for container.",
+                   arg_inner_cgver == CGROUP_UNIFIED_NONE ? "legacy" :
+-                  arg_inner_cgver == CGROUP_UNIFIED_SYSTEMD ? "hybrid" : "unified");
++                  arg_inner_cgver == CGROUP_UNIFIED_SYSTEMD233 ? "hybrid" : "unified");
+ 
+         return 0;
+ }
+-- 
+2.18.0
+

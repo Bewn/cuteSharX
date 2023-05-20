@@ -1,0 +1,39 @@
+From 5562ef8e9f100c3e9763bb9b57b697deea9a844a Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@parabola.nu>
+Date: Fri, 7 Jul 2017 15:17:41 -0400
+Subject: [PATCH 04/38] nspawn: sync_cgroup(): Rename arg_uid_shift ->
+ uid_shift
+
+Naming it arg_uid_shift is confusing because of the global arg_uid_shift in
+nspawn.c
+
+(cherry picked from commit 93dbdf6cb1466133def725986a4605f8594959ae)
+---
+ src/nspawn/nspawn-cgroup.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index 0be911999a..4a3cd29094 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -75,7 +75,7 @@ int chown_cgroup(pid_t pid, CGroupUnified unified_requested, uid_t uid_shift) {
+         return 0;
+ }
+ 
+-int sync_cgroup(pid_t pid, CGroupUnified unified_requested, uid_t arg_uid_shift) {
++int sync_cgroup(pid_t pid, CGroupUnified unified_requested, uid_t uid_shift) {
+         _cleanup_free_ char *cgroup = NULL;
+         char tree[] = "/tmp/unifiedXXXXXX", pid_string[DECIMAL_STR_MAX(pid) + 1];
+         bool undo_mount = false;
+@@ -129,7 +129,7 @@ int sync_cgroup(pid_t pid, CGroupUnified unified_requested, uid_t arg_uid_shift)
+         }
+ 
+         fn = strjoina(tree, cgroup);
+-        r = chown_cgroup_path(fn, arg_uid_shift);
++        r = chown_cgroup_path(fn, uid_shift);
+         if (r < 0)
+                 log_error_errno(r, "Failed to chown() cgroup %s: %m", fn);
+ finish:
+-- 
+2.18.0
+

@@ -1,0 +1,189 @@
+From ae356cb827c754f40ac13be8cb186c133a6cdef5 Mon Sep 17 00:00:00 2001
+From: Luke Shumaker <lukeshu@lukeshu.com>
+Date: Sat, 17 Jun 2017 17:36:48 -0400
+Subject: [PATCH 27/38] nspawn: Go ahead and always decide the cgroup mounts in
+ the outer child, not inner
+
+It mounts them in the outer child if !use_cgns, or inner child if use_cgns.
+Previously, it decided the mounts at the same place that it actually
+mounted them.  But, for simplicity and flexibility, always decide them in
+the outer child.
+
+Also, drop the now superfluous "dest" argument to cgroup_mount_mounts().
+---
+ src/nspawn/nspawn-cgroup.c | 31 +++++++------------------------
+ src/nspawn/nspawn-cgroup.h |  3 +--
+ src/nspawn/nspawn.c        | 38 ++++++++++++++++++--------------------
+ 3 files changed, 26 insertions(+), 46 deletions(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index f63827188b..1c20a3f630 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -500,6 +500,10 @@ int cgroup_decide_mounts(
+         case CGROUP_UNIFIED_NONE:
+         case CGROUP_UNIFIED_SYSTEMD232:
+         case CGROUP_UNIFIED_SYSTEMD233:
++                /* Historically, if use_cgns, then this ran inside the container; if !use_cgns, then it ran outside.
++                 * The use_cgns one had to be added because running inside the container, it couldn't look at the host
++                 * '/sys'.  Now that they both run outside the container again, I'm afraid to unify them because I'm
++                 * worried that someone depends on the subtle differences in their behavior. */
+                 if (use_cgns)
+                         return cgroup_decide_mounts_sd_y_cgns(ret_mounts, outer_cgver, inner_cgver);
+                 else
+@@ -543,14 +547,13 @@ static int cgroup_mount_cg(
+ }
+ 
+ int cgroup_mount_mounts(
+-                const char *dest,
+                 CGMounts m,
+                 bool use_cgns,
+                 uid_t uid_shift,
+                 const char *selinux_apifs_context) {
+ 
+         const bool use_userns = uid_shift != UID_INVALID;
+-        const char *cgroup_root = prefix_roota(dest, "/sys/fs/cgroup");
++        const char *cgroup_root = "/sys/fs/cgroup";
+ 
+         bool used_tmpfs = false;
+ 
+@@ -575,7 +578,7 @@ int cgroup_mount_mounts(
+                         break;
+                 case CGMOUNT_TMPFS:
+                         used_tmpfs = true;
+-                        r = path_is_mount_point(dst, dest, path_equal(cgroup_root, dst) ? AT_SYMLINK_FOLLOW : 0);
++                        r = path_is_mount_point(dst, NULL, path_equal(cgroup_root, dst) ? AT_SYMLINK_FOLLOW : 0);
+                         if (r < 0)
+                                 return log_error_errno(r, "Failed to determine if %s is mounted already: %m", dst);
+                         if (r > 0)
+@@ -590,7 +593,7 @@ int cgroup_mount_mounts(
+                         break;
+                 case CGMOUNT_CGROUP1:
+                 case CGMOUNT_CGROUP2:
+-                        r = path_is_mount_point(dst, dest, path_equal(cgroup_root, dst) ? AT_SYMLINK_FOLLOW : 0);
++                        r = path_is_mount_point(dst, NULL, path_equal(cgroup_root, dst) ? AT_SYMLINK_FOLLOW : 0);
+                         if (r < 0 && r != -ENOENT)
+                                 return log_error_errno(r, "Failed to determine if %s is mounted already: %m", dst);
+                         if (r > 0) {
+@@ -621,26 +624,6 @@ int cgroup_mount_mounts(
+ 
+ /* mount_cgroups, mount_systemd_cgroup_writable *********************/
+ 
+-int mount_cgroups(
+-                const char *dest,
+-                CGroupUnified outer_cgver,
+-                CGroupUnified inner_cgver,
+-                bool use_userns,
+-                uid_t uid_shift,
+-                uid_t uid_range,
+-                const char *selinux_apifs_context,
+-                bool use_cgns) {
+-
+-        _cleanup_(cgroup_free_mounts) CGMounts mounts = {};
+-        int r;
+-
+-        r = cgroup_decide_mounts(&mounts, outer_cgver, inner_cgver, use_cgns);
+-        if (r < 0)
+-                return r;
+-
+-        return cgroup_mount_mounts(dest, mounts, use_cgns, use_userns ? uid_shift : UID_INVALID, selinux_apifs_context);
+-}
+-
+ static int mount_systemd_cgroup_writable_one(const char *root, const char *own) {
+         int r;
+ 
+diff --git a/src/nspawn/nspawn-cgroup.h b/src/nspawn/nspawn-cgroup.h
+index f066ca33a9..b35ef666fc 100644
+--- a/src/nspawn/nspawn-cgroup.h
++++ b/src/nspawn/nspawn-cgroup.h
+@@ -14,8 +14,7 @@ typedef struct CGMounts {
+ 
+ int cgroup_setup(pid_t pid, CGroupUnified outer_cgver, CGroupUnified inner_cgver, uid_t uid_shift, bool keep_unit);
+ int cgroup_decide_mounts(CGMounts *ret_mounts, CGroupUnified outer_cgver, CGroupUnified inner_cgver, bool use_cgns);
+-int cgroup_mount_mounts(const char *dest, CGMounts mounts, bool use_cgns, uid_t uid_shift, const char *selinux_apifs_context);
++int cgroup_mount_mounts(CGMounts mounts, bool use_cgns, uid_t uid_shift, const char *selinux_apifs_context);
+ void cgroup_free_mounts(CGMounts *mounts);
+ 
+-int mount_cgroups(const char *dest, CGroupUnified outer_cgver, CGroupUnified inner_cgver, bool userns, uid_t uid_shift, uid_t uid_range, const char *selinux_apifs_context, bool use_cgns);
+ int mount_systemd_cgroup_writable(const char *dest, CGroupUnified inner_cgver);
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index 5e35a47956..c831b4e3f3 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -2527,7 +2527,7 @@ static int inner_child(
+                 int kmsg_socket,
+                 int rtnl_socket,
+                 FDSet *fds,
+-                CGroupUnified outer_cgver) {
++                CGMounts cgmounts) {
+ 
+         _cleanup_free_ char *home = NULL;
+         char as_uuid[37];
+@@ -2599,15 +2599,11 @@ static int inner_child(
+                 r = unshare(CLONE_NEWCGROUP);
+                 if (r < 0)
+                         return log_error_errno(errno, "Failed to unshare cgroup namespace: %m");
+-                r = mount_cgroups(
+-                                "",
+-                                outer_cgver,
+-                                arg_inner_cgver,
+-                                arg_userns_mode != USER_NAMESPACE_NO,
+-                                arg_uid_shift,
+-                                arg_uid_range,
+-                                arg_selinux_apifs_context,
+-                                true);
++                r = cgroup_mount_mounts(cgmounts,
++                                        arg_use_cgns,
++                                        arg_userns_mode == USER_NAMESPACE_NO ? UID_INVALID : 0,
++                                        arg_selinux_apifs_context);
++                cgroup_free_mounts(&cgmounts);
+                 if (r < 0)
+                         return r;
+         } else {
+@@ -2834,6 +2830,7 @@ static int outer_child(
+         int r, which_failed;
+         pid_t pid;
+         ssize_t l;
++        _cleanup_(cgroup_free_mounts) CGMounts cgmounts = {};
+ 
+         assert(barrier);
+         assert(directory);
+@@ -3061,16 +3058,17 @@ static int outer_child(
+         if (r < 0)
+                 return r;
+ 
++        r = cgroup_decide_mounts(&cgmounts,
++                                 outer_cgver, arg_inner_cgver,
++                                 arg_use_cgns);
++        if (r < 0)
++                return r;
++
+         if (!arg_use_cgns) {
+-                r = mount_cgroups(
+-                                directory,
+-                                outer_cgver,
+-                                arg_inner_cgver,
+-                                arg_userns_mode != USER_NAMESPACE_NO,
+-                                arg_uid_shift,
+-                                arg_uid_range,
+-                                arg_selinux_apifs_context,
+-                                false);
++                r = cgroup_mount_mounts(cgmounts,
++                                        arg_use_cgns,
++                                        arg_userns_mode == USER_NAMESPACE_NO ? UID_INVALID : arg_uid_shift,
++                                        arg_selinux_apifs_context);
+                 if (r < 0)
+                         return r;
+         }
+@@ -3108,7 +3106,7 @@ static int outer_child(
+                                 return r;
+                 }
+ 
+-                r = inner_child(barrier, directory, secondary, kmsg_socket, rtnl_socket, fds, outer_cgver);
++                r = inner_child(barrier, directory, secondary, kmsg_socket, rtnl_socket, fds, cgmounts);
+                 if (r < 0)
+                         _exit(EXIT_FAILURE);
+ 
+-- 
+2.18.0
+
